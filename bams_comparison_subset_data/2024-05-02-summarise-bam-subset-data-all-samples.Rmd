@@ -1,0 +1,615 @@
+---
+title:  "p28443 Create common data tables"
+author: "Natalia Zajac"
+output:
+  html_document: 
+    highlight: pygments
+    theme: sand
+    code_folding: hide
+    toc: yes
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r, message=FALSE, warning=FALSE}
+library(Seurat)
+library(HDF5Array)
+library(ezRun)
+library(RColorBrewer)
+library(SingleCellExperiment)
+library(pheatmap)
+library(DropletUtils)
+library(scuttle)
+library(BiocParallel)
+library(data.table)
+library(ggplot2)
+library(ezRun)
+library(Seurat)
+library(tidyverse)
+library(Rsamtools)
+library(GenomicAlignments)
+library(cowplot)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, knitr.table.format = "html")
+param <- list(cores = 8, npcs = 20, minMapQuality=0, keepMultiHits=TRUE)
+clusterResolution <- 1
+BPPARAM <- MulticoreParam(workers = param$cores)
+register(BPPARAM)
+
+```
+
+# {.tabset}
+
+## Combine
+
+Run this for every sample
+
+```{r,  eval=FALSE, echo=TRUE}
+#Get Illumina data
+# illBam <- paste0("/scratch/zajacn/p28443/", sm, "-AA.bam")
+# 
+# system.time({
+#   sbp <- ScanBamParam(what =  c("qname", "seq"), tag = c("GN", "xf", "CB", "UB", "UR", "ts", "pa", "RE", "NH"))
+#   illGa <- readGAlignments(illBam, param = sbp)
+# })
+# mcols(illGa)$CB <- sub("-1", "", mcols(illGa)$CB)
+# use <- is.na(mcols(illGa)$UB)
+# mcols(illGa)$UB[use] <- mcols(illGa)$UR[use]
+# mcols(illGa)$UR <- NULL
+# 
+# #Plus get the unaligned reads.
+# 
+# system.time({
+#   sbp <- ScanBamParam(what = c("qname", "seq"), tag = c("xf", "CB", "UB", "ts", "pa"), scanBamFlag(isUnmappedQuery = TRUE))
+#   illBamList <- scanBam(illBam, param = sbp)[[1]]
+# })
+# illBamList$tag$CB <- sub("-1", "", illBamList$tag$CB)
+# illUnmapped <- cbind(qname=illBamList$qname, data.frame(illBamList$tag))
+# 
+# #Load the Pacbio data and keep only same cells in all datasets
+# 
+# pbbam <- sampleInfo$IsoSeqBam
+# 
+# system.time({
+#   sbp <- ScanBamParam(what = c("qname", "seq"), tag = c( "CB", "XM"), tagFilter=list(rc=1))
+#   pbGa <- readGAlignments(pbbam, param = sbp)
+# })
+# 
+# use <- (mcols(pbGa)$CB %>% DNAStringSet() %>% reverseComplement() %>% as.character() ) %in%  mcols(illGa)$CB
+# pbGa <- pbGa[use]
+# 
+# pbdir <- sampleInfo$PigeonUnfiltered
+# pbAnno <- data.table::fread(file.path(pbdir, "scisoseq.annotated.info.csv"), sep="\t")
+# pbAnno <- pbAnno[pbAnno$BCrev %in% mcols(illGa)$CB, ]
+# use <- mcols(illGa)$CB %in% pbAnno$BCrev
+# illGa <- illGa[use]
+# illUnmapped <- illUnmapped[illUnmapped$CB %in% pbAnno$BCrev, ]
+# 
+# pbAnnofill <- sampleInfo$PigeonFiltered
+# pbAnnofill <- data.table::fread(file.path(pbAnnofill, "scisoseq.annotated.info.csv"), sep="\t")
+# pbAnnofill <- pbAnnofill[pbAnnofill$BCrev %in% mcols(illGa)$CB, ]
+# 
+# 
+# stopifnot(pbAnno$id %in% mcols(pbGa)$qname)
+# idx <- match(mcols(pbGa)$qname, pbAnno$id)
+# mcols(pbGa)$tagId <- paste(as.character(reverseComplement(DNAStringSet(mcols(pbGa)$CB))),
+#                            as.character(reverseComplement(DNAStringSet(mcols(pbGa)$XM))))
+# mcols(pbGa)$category <- pbAnno$category[idx]
+# mcols(pbGa)$category[is.na(mcols(pbGa)$category)] <- "unannotated"
+# mcols(pbGa)$gene <- pbAnno$gene[idx]
+# mcols(pbGa)$length <- pbAnno$length[idx]
+# 
+# mcols(illGa)$tagId <- paste(mcols(illGa)$CB, mcols(illGa)$UB)
+# illUnmapped$tagId <- paste(illUnmapped$CB, illUnmapped$UB)
+# 
+# commonTagIds <- intersect(mcols(pbGa)$tagId, mcols(illGa)$tagId)
+# illRgs <- illGa[match(commonTagIds, mcols(illGa)$tagId)]
+# pbRgs <- pbGa[match(commonTagIds, mcols(pbGa)$tagId)]
+# 
+# print(length(commonTagIds))
+# 
+# #Make pb table and save
+# mcols(pbGa)$isDuplicated = ""
+# mcols(pbGa)[mcols(pbGa)$qname %in% unique(mcols(pbGa[duplicated(mcols(pbGa)$qname)])$qname),]$isDuplicated =  "Multimapping"
+# mcols(pbGa)[mcols(pbGa)$isDuplicated == "",]$isDuplicated = "Uniquely mapping"
+# 
+# mcols(pbGa)$illStatus <- case_when(mcols(pbGa)$tagId %in% commonTagIds ~ "Common", mcols(pbGa)$tagId %in% unique(illUnmapped$tagId) ~ "inIlluminaUnmapped", TRUE ~ "notinIllumina")
+# mcols(pbGa)$gc <- letterFrequency(mcols(pbGa)$seq, letters="GC", as.prob = FALSE)[ ,"G|C"] /width(mcols(pbGa)$seq)
+# xx <- cbind(data.frame(granges(pbGa)), data.frame(mcols(pbGa)))
+# xx$qwidth <- width(xx$seq)
+# xx$widthClasses <- ezCut(log2(xx$qwidth), breaks = 7:11)
+# xx$gcClasses <- ezCut(xx$gc, breaks = seq(0.3, 0.7, 0.1))
+# xx$Counted = ifelse(xx$qname %in% pbAnnofill$id, "Counted", "NotCounted")
+# xx$Sample = sm
+# xx = xx[,colnames(xx) != "seq"]
+# write_delim(xx, paste0("/srv/GT/analysis/zajacn/p28443/subset_tables/", sm, "_pb.txt"))
+# 
+# #Make ill table and save
+# 
+# 
+# mcols(illGa)$isDuplicated = ""
+# mcols(illGa[mcols(illGa)$NH == 1,])$isDuplicated = "Uniquely mapping"
+# mcols(illGa[mcols(illGa)$NH > 1,])$isDuplicated = "Multimapping"
+# 
+# mcols(illGa)$illStatus <- ifelse(mcols(illGa)$tagId %in% commonTagIds, "Common", "notinPacbio")
+# mcols(illGa)$gc <- letterFrequency(mcols(illGa)$seq, letters="GC", as.prob = FALSE)[ ,"G|C"] /width(mcols(illGa)$seq)
+# xm <- cbind(data.frame(granges(illGa)), data.frame(mcols(illGa)))
+# xm$qwidth <- width(xm$seq)
+# xm$widthClasses <- ezCut(log2(xm$qwidth), breaks = 7:11)
+# xm$gcClasses <- ezCut(xm$gc, breaks = seq(0.3, 0.7, 0.1))
+# xm$Counted = ifelse(xm$xf == "25", "Counted", "NotCounted")
+# xm$Sample = sm
+# xm = xm[,colnames(xm) != "seq"]
+# write_delim(xm, paste0("/srv/GT/analysis/zajacn/p28443/subset_tables/", sm, "_ill.txt"))
+```
+
+
+Afterwards read all of the datasets:
+
+```{r, echo=TRUE}
+sinfo = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/2024-01-17-sampleInfo.tsv")
+
+samples = list("G18_626_Normal" = "Normal",
+               "G18_626_ccRCC" = "ccRCC_2",
+               "G16_315_ccRCC" = "ccRCC_3",
+               "G18_109_ccRCC" = "ccRCC_4",
+               "G16_667_ccRCC" = "ccRCC_5")
+
+final_table_pb = NULL
+
+for(i in rownames(sinfo)[1:5]){
+  x = data.table::fread(paste0("/srv/GT/analysis/zajacn/p28443/subset_tables/", i, "_pb.txt"), sep = " ", showProgress=FALSE)
+  x$Sample = samples[[i]]
+  final_table_pb = rbind(final_table_pb, x)
+}
+final_table_pb$Sample = factor(final_table_pb$Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+final_table_ill = NULL
+
+for(i in rownames(sinfo)[1:5]){
+  x = data.table::fread(paste0("/srv/GT/analysis/zajacn/p28443/subset_tables/", i, "_ill.txt"), sep = " ", showProgress=FALSE)
+  x$Sample = samples[[i]]
+  final_table_ill = rbind(final_table_ill, x)
+}
+final_table_ill$Sample = factor(final_table_ill$Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+#Elimiante PCR dups
+final_table_ill = final_table_ill[!duplicated(final_table_ill[,c(1,2,3,15,23)]),]
+```
+
+## Subsampled data summary
+
+```{r, fig.width=8, fig.height=5}
+final_table_ill %>% group_by(Sample) %>% summarise(count = n_distinct(tagId))
+```
+
+```{r, fig.width=8, fig.height=5}
+library(ggplot2)
+library(gridExtra)
+
+table = final_table_pb %>% group_by(Sample) %>% summarise("Number of cells" = n_distinct(CB))
+p1 = merge(final_table_pb %>% 
+        group_by(Sample, CB)  %>% 
+        summarise("XM" = n_distinct(XM)) %>% 
+        mutate(CB= as.character(reverseComplement(DNAStringSet(CB)))),  
+      final_table_ill %>% 
+        group_by(Sample, CB)  %>% 
+        summarise("UB" = n_distinct(UB)), by = c("Sample", "CB")) %>% 
+  ggplot(aes(XM, UB, color = Sample)) + 
+  geom_point(size = 3) + 
+  geom_abline() + 
+  xlab("Pacbio") + 
+  ylab("Illumina") + 
+  ggtitle("UMIs per cell") + 
+  scale_x_log10() + 
+  scale_y_log10() + 
+  #xlim(10000, 150000) + 
+  #ylim(10000, 150000) + 
+  #annotation_custom(tableGrob(table), xmin=90000, xmax=140000, ymin=30000, ymax=60000) +
+  theme(text=element_text(size = 15))
+
+p1 + xlim(1e+04, 3e+05) + ylim(1e+04, 3e+05)
+```
+
+## What is the percentage of sharing of BC_UMI
+
+```{r, fig.width=11, fig.height=5}
+library(viridis)
+x = merge(final_table_pb %>% 
+        group_by(Sample, illStatus) %>% 
+        summarise("Pacbio" = n_distinct(tagId)) %>% 
+        mutate(illStatus = if_else(illStatus == "notinIllumina", "Unique", illStatus)) , 
+      final_table_ill %>% 
+        group_by(Sample, illStatus) %>% 
+        summarise("Illumina" = n_distinct(tagId)) %>% 
+        mutate(illStatus = if_else(illStatus == "notinPacbio", "Unique", illStatus)), 
+      by = c("Sample", "illStatus"), all = TRUE) %>% 
+  replace(is.na(.), 0) %>% 
+  melt() 
+x = x[x$illStatus != "inIlluminaUnmapped",]
+
+ggplot(x, aes(Sample, value, fill = illStatus)) + 
+  geom_col(position = "fill") + 
+  facet_grid(~variable) + 
+  labs(fill = "Category", y = "Proportion") + 
+  scale_fill_viridis(discrete = TRUE) +
+  ggtitle("cell barcode-UMI combinations") + theme(text = element_text(size = 15), axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+Alternatively:
+
+```{r, fig.width=11, fig.height=5}
+x = merge(final_table_pb %>% 
+              group_by(Sample, illStatus) %>% 
+              summarise("Pacbio" = n_distinct(tagId)) %>% 
+              mutate(illStatus = if_else(illStatus == "notinIllumina", "Unique", illStatus)) , 
+          final_table_ill %>% 
+              group_by(Sample, illStatus) %>% 
+              summarise("Illumina" = n_distinct(tagId)) %>% 
+              mutate(illStatus = if_else(illStatus == "notinPacbio", "Unique", illStatus)), 
+          by = c("Sample", "illStatus"), all = TRUE) %>% 
+    replace(is.na(.), 0) %>% 
+    melt() 
+
+x = x[x$illStatus != "inIlluminaUnmapped",]
+
+x = x %>% mutate(Method = case_when(illStatus == "Common" ~ "Both common", illStatus == "Unique" & variable == "Pacbio" ~ "Pacbio specific",  illStatus == "Unique" & variable == "Illumina" ~ "Illumina specific"))
+
+ggplot(x, aes(Sample, value, fill = Method)) + geom_col(position = "fill") + scale_fill_manual(values = c("#440154FF", "darkgoldenrod", "#ffcf20FF")) + xlab("Proportion") + theme(text = element_text(size = 15), axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+
+## Characterization of common tagIds
+
+```{r, fig.width=15, fig.height=6}
+
+xx = merge(final_table_ill[(final_table_ill$illStatus == "Common"),] %>% 
+        group_by(Sample, isDuplicated, Counted) %>% 
+        summarise("Illumina" = n_distinct(tagId)), 
+      final_table_pb[(final_table_pb$illStatus == "Common"),] %>% 
+        group_by(Sample,isDuplicated, Counted) %>% 
+        summarise("Pacbio" = n_distinct(tagId)), by = c("isDuplicated", "Counted", "Sample"), all = TRUE) %>% 
+    replace(is.na(.), 0) %>%
+  melt()
+
+xx$ratio = ""
+for (i in unique(xx$Sample)){
+  for (x in unique(xx$variable)){
+    xx[xx$Sample == i & xx$variable == x,]$ratio = (xx[xx$Sample == i & xx$variable == x,]$value/sum(xx[xx$Sample == i & xx$variable == x,]$value)) * 100
+  }
+}
+
+ggplot(xx, aes(x = "", y = value, fill = paste(isDuplicated, Counted))) + 
+    geom_bar(stat = 'identity', position = position_fill())  +
+    coord_polar(theta = "y")+
+    facet_wrap(variable~factor(Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5")), ncol=5)+
+    theme_void() +
+    scale_fill_manual(values = c("red", "darkcyan", "black", "grey"))+
+    geom_text(aes(label = ifelse(ratio < 1.7, "", round(as.integer(ratio),2))),
+              position = position_fill(vjust = 0.5), color = "yellow", size = 10) + 
+    labs(fill = "Category") + ggtitle("Common cell barcode-UMI combinations") +
+    theme(text = element_text(size = 25), legend.text = element_text(size = 15))
+```
+
+## Characterization of common tagIds - genomic location - uniquely mapping 
+
+```{r, fig.width=9, fig.height=4}
+cm_tg = NULL
+for (i in unique(final_table_pb$Sample)){
+  cm = unique(final_table_pb[final_table_pb$Sample == i & final_table_pb$illStatus == "Common",]$tagId)
+  cm2 = unique(final_table_ill[final_table_ill$Sample == i & final_table_ill$illStatus == "Common" & final_table_ill$isDuplicated == "Uniquely mapping" & final_table_ill$Counted == "Counted",]$tagId)
+  stopifnot(cm2 %in% cm)
+  cm_tg[[i]] = cm2
+}
+
+seq = read.delim("/srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/genes_10XGEX_SC_SMRTLink_Index/fasta/genome.fa.fai", sep = "\t", header = FALSE)
+seq = seq[,1:2] %>% mutate( seqnames = V1, seqlengths = V2, isCircular = "FALSE") %>% dplyr::select(seqnames, seqlengths, isCircular)
+
+
+ovl_UC = NULL
+for (i in unique(final_table_pb$Sample)){
+  xx = final_table_pb[final_table_pb$Sample == i,]
+  xm = final_table_ill[final_table_ill$Sample == i & final_table_ill$isDuplicated == "Uniquely mapping" & final_table_ill$Counted == "Counted",]
+  commonTagIds = cm_tg[[i]]
+  ovlstatus = poverlaps(makeGRangesFromDataFrame(xm[match(commonTagIds, xm$tagId),], seqinfo=Seqinfo(seqnames = seq$seqnames, seqlengths=seq$seqlengths, isCircular=NA, genome=NA)), 
+                        makeGRangesFromDataFrame(xx[match(commonTagIds, xx$tagId),], seqinfo=Seqinfo(seqnames = seq$seqnames, seqlengths=seq$seqlengths, isCircular=NA, genome=NA)), 
+                        type = "within")
+  ovl_UC = rbind(ovl_UC, data.frame(table(ovlstatus)) %>% mutate(Sample = i) %>% mutate(proportion = round(Freq/sum(Freq), 3)))
+}
+ovl_UC$Sample = factor(ovl_UC$Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+ovl_UC %>% mutate(`Same Genomic Location` = ovlstatus) %>% ggplot(aes(Sample, proportion, fill = `Same Genomic Location`)) + geom_col(position = "dodge") + theme(text = element_text(size = 15), axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+```{r, fig.width=9, fig.height=4}
+cm_tg = NULL
+for (i in unique(final_table_pb$Sample)){
+  cm = unique(final_table_pb[final_table_pb$Sample == i & final_table_pb$illStatus == "Common",]$tagId)
+  cm2 = unique(final_table_ill[final_table_ill$Sample == i & final_table_ill$illStatus == "Common" & final_table_ill$isDuplicated == "Uniquely mapping" & final_table_ill$Counted == "NotCounted",]$tagId)
+  stopifnot(cm2 %in% cm)
+  cm_tg[[i]] = cm2
+}
+
+seq = read.delim("/srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/genes_10XGEX_SC_SMRTLink_Index/fasta/genome.fa.fai", sep = "\t", header = FALSE)
+seq = seq[,1:2] %>% mutate( seqnames = V1, seqlengths = V2, isCircular = "FALSE") %>% dplyr::select(seqnames, seqlengths, isCircular)
+
+
+ovl_UNC = NULL
+for (i in unique(final_table_pb$Sample)){
+  xx = final_table_pb[final_table_pb$Sample == i,]
+  xm = final_table_ill[final_table_ill$Sample == i & final_table_ill$isDuplicated == "Uniquely mapping" & final_table_ill$Counted == "NotCounted",]
+  commonTagIds = cm_tg[[i]]
+  ovlstatus = poverlaps(makeGRangesFromDataFrame(xm[match(commonTagIds, xm$tagId),], seqinfo=Seqinfo(seqnames = seq$seqnames, seqlengths=seq$seqlengths, isCircular=NA, genome=NA)), 
+                        makeGRangesFromDataFrame(xx[match(commonTagIds, xx$tagId),], seqinfo=Seqinfo(seqnames = seq$seqnames, seqlengths=seq$seqlengths, isCircular=NA, genome=NA)), 
+                        type = "within")
+  ovl_UNC = rbind(ovl_UNC, data.frame(table(ovlstatus)) %>% mutate(Sample = i) %>% mutate(proportion = round(Freq/sum(Freq), 3)))
+}
+ovl_UNC$Sample = factor(ovl_UNC$Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+ovl_UNC %>% mutate(`Same Genomic Location` = ovlstatus) %>% ggplot(aes(Sample, proportion, fill = `Same Genomic Location`)) + geom_col(position = "dodge") + theme(text = element_text(size = 15), axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+## Characterization of common tagIds - genomic location - multi-mapping
+
+```{r, fig.width=9, fig.height=4}
+cm_tg = NULL
+for (i in unique(final_table_pb$Sample)){
+  cm = unique(final_table_pb[final_table_pb$Sample == i & final_table_pb$illStatus == "Common",]$tagId)
+  cm2 = unique(final_table_ill[final_table_ill$Sample == i & final_table_ill$illStatus == "Common" & final_table_ill$isDuplicated == "Multimapping" & final_table_ill$Counted == "Counted",]$tagId)
+  stopifnot(cm2 %in% cm)
+  cm_tg[[i]] = cm2
+}
+
+seq = read.delim("/srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/genes_10XGEX_SC_SMRTLink_Index/fasta/genome.fa.fai", sep = "\t", header = FALSE)
+seq = seq[,1:2] %>% mutate( seqnames = V1, seqlengths = V2, isCircular = "FALSE") %>% dplyr::select(seqnames, seqlengths, isCircular)
+
+
+ovl_MC = NULL
+for (i in unique(final_table_pb$Sample)){
+  xx = final_table_pb[final_table_pb$Sample == i,]
+  xm = final_table_ill[final_table_ill$Sample == i & final_table_ill$isDuplicated == "Multimapping" & final_table_ill$Counted == "Counted",]
+  commonTagIds = cm_tg[[i]]
+  x = makeGRangesListFromDataFrame(xm[xm$tagId  %in% commonTagIds,], seqinfo=Seqinfo(seqnames = seq$seqnames, seqlengths=seq$seqlengths, isCircular=NA, genome=NA), split.field = "tagId")
+  x = unlist(x)
+  mcols(x)$tagId = names(x)
+  x2 = makeGRangesListFromDataFrame(xx[match(unique(mcols(x)$tagId), xx$tagId),], seqinfo=Seqinfo(seqnames = seq$seqnames, seqlengths=seq$seqlengths, isCircular=NA, genome=NA), split.field = "tagId")
+  x2 = unlist(x2)
+  mcols(x2)$tagId = names(x2)
+  ovlstatus = poverlaps(granges(x, use.mcols = TRUE), x2, type = "within") %>% as.vector()
+  ovlstatus <- tapply(ovlstatus, mcols(x)$tagId, any)
+  ovl_MC = rbind(ovl_MC, data.frame(table(ovlstatus)) %>% mutate(Sample = i) %>% mutate(proportion = round(Freq/sum(Freq), 3)))
+}
+
+ovl_MC %>% mutate(`Same Genomic Location` = ovlstatus) %>% ggplot(aes(Sample, proportion, fill = `Same Genomic Location`)) + geom_col(position = "dodge") + theme(text = element_text(size = 15))
+```
+```{r, fig.width=9, fig.height=4}
+cm_tg = NULL
+for (i in unique(final_table_pb$Sample)){
+  cm = unique(final_table_pb[final_table_pb$Sample == i & final_table_pb$illStatus == "Common",]$tagId)
+  cm2 = unique(final_table_ill[final_table_ill$Sample == i & final_table_ill$illStatus == "Common" & final_table_ill$isDuplicated == "Multimapping" & final_table_ill$Counted == "NotCounted",]$tagId)
+  stopifnot(cm2 %in% cm)
+  cm_tg[[i]] = cm2
+}
+
+seq = read.delim("/srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/genes_10XGEX_SC_SMRTLink_Index/fasta/genome.fa.fai", sep = "\t", header = FALSE)
+seq = seq[,1:2] %>% mutate( seqnames = V1, seqlengths = V2, isCircular = "FALSE") %>% dplyr::select(seqnames, seqlengths, isCircular)
+
+
+ovl_MNC = NULL
+for (i in unique(final_table_pb$Sample)){
+  xx = final_table_pb[final_table_pb$Sample == i,]
+  xm = final_table_ill[final_table_ill$Sample == i & final_table_ill$isDuplicated == "Multimapping" & final_table_ill$Counted == "NotCounted",]
+  commonTagIds = cm_tg[[i]]
+  x = makeGRangesListFromDataFrame(xm[xm$tagId  %in% commonTagIds,], seqinfo=Seqinfo(seqnames = seq$seqnames, seqlengths=seq$seqlengths, isCircular=NA, genome=NA), split.field = "tagId")
+  x = unlist(x)
+  mcols(x)$tagId = names(x)
+  x2 = makeGRangesListFromDataFrame(xx[match(unique(mcols(x)$tagId), xx$tagId),], seqinfo=Seqinfo(seqnames = seq$seqnames, seqlengths=seq$seqlengths, isCircular=NA, genome=NA), split.field = "tagId")
+  x2 = unlist(x2)
+  mcols(x2)$tagId = names(x2)
+  ovlstatus = poverlaps(granges(x, use.mcols = TRUE), x2, type = "within") %>% as.vector()
+  ovlstatus <- tapply(ovlstatus, mcols(x)$tagId, any)
+  ovl_MNC = rbind(ovl_MNC, data.frame(table(ovlstatus)) %>% mutate(Sample = i) %>% mutate(proportion = round(Freq/sum(Freq), 3)))
+}
+
+ovl_MNC %>% mutate(`Same Genomic Location` = ovlstatus) %>% ggplot(aes(Sample, proportion, fill = `Same Genomic Location`)) + geom_col(position = "dodge") + theme(text = element_text(size = 15))
+```
+## Genomic location - Pie charts
+
+```{r, fig.width=9, fig.height=4}
+ovl_UC$category = "Uniquely mapping Counted"
+ovl_UNC$category = "Uniquely mapping Not Counted"
+ovl_MC$category = "Multimapping Counted"
+ovl_MNC$category = "Multimapping Not Counted"
+
+ovl_all = rbind(ovl_UC, ovl_UNC, ovl_MC, ovl_MNC)
+
+ggplot(ovl_all, aes(x = "", y = proportion, fill = ovlstatus)) + geom_bar(stat = 'identity', position = position_fill())  + facet_wrap(category~factor(Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5")), ncol=5) +
+    coord_polar(theta = "y") + theme_void() + 
+    labs(fill = "Category") + ggtitle("Common cell barcode-UMI combinations") +
+    theme(text = element_text(size = 10), legend.text = element_text(size = 10)) +
+    geom_text(aes(label = ifelse(proportion < 0.09, "", round(proportion * 100,0))),
+              position = position_fill(vjust = 0.5), color = "yellow", size = 7) + scale_fill_manual(values = c("#00BFC4", "#F8766D"))
+
+```
+
+## Correlation between Illumina and Pacbio divided by width and GC content
+
+```{r, fig.width=11, fig.height=10}
+final_table_pb$widthClasses = factor(final_table_pb$widthClasses, levels = c("<= 7", "(7 - 8]", "(8 - 9]", "(9 - 10]", "(10 - 11]", "> 11" ))
+final_table_pb$gcClasses = factor(final_table_pb$gcClasses, levels = c("<= 0.3", "(0.3 - 0.4]", "(0.4 - 0.5]", "(0.5 - 0.6]", "(0.6 - 0.7]", "> 0.7"  ))
+# for (i in unique(final_table_pb$Sample)){
+#   illFrac <- tapply(as.integer(final_table_pb[final_table_pb$Sample == i,]$illStatus == "Common"), INDEX = list(width=final_table_pb[final_table_pb$Sample == i,]$widthClasses, gc=final_table_pb[final_table_pb$Sample == i,]$gcClasses), FUN = mean)
+#   corrplot::corrplot(illFrac, is.corr=FALSE, method = "pie", title = "fraction of pacbio reads that has illumina read",
+#                    xlab="GC", ylab="log2 width", mar=c(0,2,2,0))
+#   mtext("gc content", side = 3, line=1)
+#   mtext("log2 qwidth", side = 2, line=2)
+# }
+
+illFrac <- tapply(as.integer(final_table_pb$illStatus == "Common"), INDEX = list(width=final_table_pb$widthClasses, gc=final_table_pb$gcClasses), FUN = mean)
+corrplot::corrplot(illFrac, is.corr=FALSE, method = "pie", title = "Fraction of Pacbio reads common with Illumina",
+                   xlab="GC", ylab="log2 width", mar=c(0,2,2,0))
+mtext("GC content", side = 3, line=1)
+mtext("Log2 of read width", side = 2, line=2)
+
+illFrac <- tapply(as.integer(final_table_pb$illStatus == "inIlluminaUnmapped"), INDEX = list(width=final_table_pb$widthClasses, gc=final_table_pb$gcClasses), FUN = mean)
+corrplot::corrplot(illFrac, is.corr=FALSE, method = "pie", title = "Fraction of Pacbio reads common with Illumina unmapped",
+                   xlab="GC", ylab="log2 width", mar=c(0,2,2,0))
+mtext("GC content", side = 3, line=1)
+mtext("Log2 of read width", side = 2, line=2)
+```
+
+
+## Correlation between Illumina and Pacbio divided by width and GC content
+
+```{r, fig.width=11, fig.height=10}
+final_table_ill$gcClasses = factor(final_table_ill$gcClasses, levels = c("<= 0.3", "(0.3 - 0.4]", "(0.4 - 0.5]", "(0.5 - 0.6]", "(0.6 - 0.7]", "> 0.7"  ))
+illFrac <- tapply(as.integer(final_table_ill$illStatus == "Common"), INDEX = list(width=final_table_ill$RE, gc=final_table_ill$gcClasses), FUN = mean)
+
+corrplot::corrplot(illFrac, is.corr=FALSE, method = "pie", title = "Fraction of Illumina reads common with Pacbio",
+                   xlab="GC", ylab="RE", mar=c(0,2,2,0))
+mtext("GC content", side = 3, line=1)
+mtext("Region", side = 2, line=2)
+
+illFrac <- tapply(as.integer(final_table_ill$illStatus == "notinPacbio"), INDEX = list(width=final_table_ill$RE, gc=final_table_ill$gcClasses), FUN = mean)
+
+corrplot::corrplot(illFrac, is.corr=FALSE, method = "pie", title = "Fraction of unique Illumina reads",
+                   xlab="GC", ylab="RE", mar=c(0,2,2,0))
+mtext("GC content", side = 3, line=1)
+mtext("Region", side = 2, line=2)
+```
+
+## Number of reads per RE tag Illumina
+
+
+```{r, fig.width=10, fig.height=8}
+p1 = final_table_ill %>%
+  mutate(illStatus=if_else(illStatus == "notinPacbio", "Unique", illStatus)) %>% group_by(Sample, RE, illStatus, Counted) %>% summarise(count = n_distinct(tagId)) %>% ggplot(aes(RE, count, fill = paste(illStatus, Counted))) + facet_grid(~factor(Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5"))) + geom_col() + labs(fill = "Category", y = "Read Count") + scale_fill_manual(values = c("blue4", "darkorange2", "cadetblue4", "brown"))
+p2 = final_table_ill %>% group_by(Sample, RE, illStatus, Counted) %>% summarise(count = mean(gc)) %>% ggplot(aes(RE, count, color = paste(illStatus, Counted))) + facet_grid(~factor(Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5"))) + geom_point(size = 3) + labs(color = "Category", y = "Mean GC") + scale_color_manual(values =  c("blue4", "darkorange2", "cadetblue4", "brown"))
+
+plot_grid(p1, p2, nrow = 2)
+```
+
+
+## Artefacts in the Illumina data. 
+
+```{r, fig.width=10, fig.height=8}
+p1 = final_table_ill %>%
+  mutate(artefacts = case_when(is.na(ts) & is.na(pa) ~ "Remaining reads", TRUE ~ "PolyA or TSO"), 
+         illStatus=if_else(illStatus == "notinPacbio", "Unique", illStatus)) %>% 
+  group_by(Sample, artefacts, illStatus) %>% 
+  summarise(count = n()) %>% 
+  ggplot(aes(Sample, count, fill = artefacts)) + 
+  geom_col(position = "fill") + 
+  facet_grid(~illStatus) + 
+  labs(fill = "Artefacts",y = "Proportion") + 
+  scale_fill_manual(values = brewer.pal(2, "Set1"))
+p2 = final_table_ill %>%
+  mutate(artefacts = case_when(is.na(ts) & is.na(pa) ~ "Remaining reads", TRUE ~ "PolyA or TSO"), 
+         illStatus=if_else(illStatus == "notinPacbio", "Unique", illStatus)) %>% 
+  group_by(Sample, artefacts, illStatus) %>% 
+  summarise(count = n()) %>% 
+  ggplot(aes(Sample, count, fill = artefacts)) + 
+  geom_col(position = "stack") + 
+  facet_grid(~illStatus) + 
+  labs(fill = "Artefacts",y = "Read count") + 
+  scale_fill_manual(values = brewer.pal(2, "Set1"))
+
+plot_grid(p1, p2, ncol = 1)
+```
+
+## Artefacts in the Pacbio data. {.tabset}
+
+```{r, fig.width=10, fig.height=8}
+
+reasons = list("Normal" = "/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/pb_segment_reads_and_sc_isoseq/0682452f-1241-41a2-8774-f67a2004c9ba/call-pb_sc_isoseq/pb_sc_isoseq/e3b856b4-e690-4d6c-a024-6a369ed1e8e5/call-pigeon/execution/scisoseq_classification.filtered_lite_reasons.txt",
+               "ccRCC_2"= "/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/pb_segment_reads_and_sc_isoseq/f9489590-ac62-476a-b05f-3ecc2da7ef32/call-pb_sc_isoseq/pb_sc_isoseq/bde6615c-fab1-4d42-b17e-62a8470bc85b/call-pigeon/execution/scisoseq_classification.filtered_lite_reasons.txt",
+               "ccRCC_3" = "/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/pb_segment_reads_and_sc_isoseq/9e2e5e5d-ab85-4f99-8f8e-05f43b2057ca/call-pb_sc_isoseq/pb_sc_isoseq/2f4e813e-e9ba-4ace-a550-2f931e57035d/call-pigeon/execution/scisoseq_classification.filtered_lite_reasons.txt",
+               "ccRCC_4"= "/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/pb_segment_reads_and_sc_isoseq/9444586f-5bc1-47f3-be9b-1e80291de67a/call-pb_sc_isoseq/pb_sc_isoseq/256183fd-b4f7-41da-b225-4ef0cbac0c7e/call-pigeon/execution/scisoseq_classification.filtered_lite_reasons.txt",
+               "ccRCC_5"= "/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/pb_segment_reads_and_sc_isoseq/e3fea0f1-c152-4ffc-862f-d0e2b5af03fc/call-pb_sc_isoseq/pb_sc_isoseq/1c5cb782-8770-4e00-b4f2-a5523b3f8258/call-pigeon/execution/scisoseq_classification.filtered_lite_reasons.txt")
+
+sampleInfo = "/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/2024-01-17-sampleInfo.tsv"
+sampleInfo = read.csv(sampleInfo, sep = "\t")
+sampleInfo = sampleInfo[1:5,]
+sampleInfo$Sample = lapply(sampleInfo$Identifier, function(x){samples[[x]]})
+sampleInfo$Reasons = lapply(sampleInfo$Sample, function(x){reasons[[x]]})
+
+reasons = NULL
+for (i in sampleInfo$Sample){
+ info = sampleInfo[sampleInfo$Sample == i,]
+ x = read.csv(paste0(info$PigeonUnfiltered, "scisoseq.annotated.info.csv"), sep = "\t")
+ x = x[x$id %in% final_table_pb[final_table_pb$Sample == i,]$qname,c(1:2)]
+ r = read.csv(unlist(info$Reasons), skip = 4)
+ xr = merge(x, r, by.x = "pbid", by.y = "filtered_isoform", all.x = TRUE)
+ xr$Sample = i
+ reasons = rbind(reasons, xr)
+}
+
+xrr = merge(reasons, final_table_pb[,c(6,14,20)], by.x = c("id", "Sample"), by.y = c("qname", "Sample"), all = TRUE)
+xrr[is.na(xrr$filter),]$filter = "Remaning reads"
+xrr$Sample = factor(xrr$Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+xrr$filter = if_else(xrr$filter == "LowCoverage/Non-Canonical", "LC/NC", xrr$filter)
+p1 = xrr[xrr$illStatus != "inIlluminaUnmapped",] %>%
+  mutate(illStatus=if_else(illStatus == "notinIllumina", "Unique", illStatus)) %>% group_by(Sample, filter, illStatus) %>% summarise(count = n()) %>% ggplot(aes(Sample, count, fill = filter)) + geom_col(position="fill") + facet_grid(~illStatus) + labs(fill = "Artefacts", y = "Proportion") + scale_fill_manual(values = c("#FA9493FF", "#76C15DFF", "#AC8EC3FF", "#C27E41FF")) + theme(text = element_text(size = 15), axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+p2 = xrr[xrr$illStatus != "inIlluminaUnmapped",] %>%
+  mutate(illStatus=if_else(illStatus == "notinIllumina", "Unique", illStatus)) %>% group_by(Sample, filter, illStatus) %>% summarise(count = n()) %>% ggplot(aes(Sample, count, fill = filter)) + geom_col(position="stack") + facet_grid(~illStatus) + labs(fill = "Artefacts", y = "Read count") + scale_fill_manual(values = c("#FA9493FF", "#76C15DFF", "#AC8EC3FF", "#C27E41FF")) + theme(text = element_text(size = 15), axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+plot_grid(p1, p2, ncol = 1)
+```
+
+
+### Proportion of isoforms
+
+```{r, fig.width=10, fig.height=8}
+xrr %>% group_by(filter, Sample) %>% summarise(count = n_distinct(pbid)) %>% pivot_wider(names_from = filter, values_from = count) %>% column_to_rownames("Sample") %>% mutate(across(where(is.numeric)) * 100/rowSums(across(where(is.numeric))))
+```
+
+### Proportion of reads
+
+```{r, fig.width=10, fig.height=8}
+xrr %>% group_by(filter, Sample) %>% summarise(count = n()) %>% pivot_wider(names_from = filter, values_from = count) %>% column_to_rownames("Sample") %>% mutate(across(where(is.numeric)) * 100/rowSums(across(where(is.numeric))))
+```
+
+## Number of reads per category Pacbio
+
+```{r, fig.width=20, fig.height=7}
+
+final_table_pb[final_table_pb$category %in% c("full-splice_match", "incomplete-splice_match", "novel_in_catalog", "novel_not_in_catalog"),] %>%
+  mutate(illStatus=if_else(illStatus == "notinIllumina", "Unique", illStatus)) %>% 
+  group_by(Sample, Counted, category, illStatus) %>% 
+  summarise(count = n()) %>% mutate(category = case_when(category == "full-splice_match" ~ "FSM", category == "incomplete-splice_match" ~ "ISM", category == "novel_in_catalog" ~ "NIC", category == "novel_not_in_catalog" ~ "NNC")) %>%
+  ggplot(aes(category, count, fill = paste(illStatus, Counted))) + 
+  geom_col() + 
+  facet_grid(~Sample) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), text = element_text(size = 25)) + 
+  scale_fill_manual(values =  c("blue4", "darkorange2", "burlywood4", "olivedrab", "cadetblue4", "brown")) + 
+  labs(y = "Read Count", fill = "Category")
+
+```
+
+## Read length for different categories in Pacbio
+
+```{r, fig.width=20, fig.height=15}
+
+groblist = NULL
+
+for (i in unique(final_table_pb$Sample)){
+  tb = final_table_pb[final_table_pb$Sample == i,] %>% group_by(illStatus) %>% summarise(`average length` = round(mean(qwidth),2))
+  p1 = ggplot(final_table_pb[final_table_pb$Sample == i,], aes(qwidth, color = illStatus)) + geom_density() + labs(x="GC content", color = "category") + annotation_custom(tableGrob(tb), xmin = 1500, xmax = 3500, ymin = 0.0015, ymax = 0.0021) + scale_color_manual(values = c("#440154FF", "#237D8EFF", "#ffcf20FF")) + theme(text = element_text(size = 15)) + ylim(0,0.0021) + xlim(0,4000) + ggtitle(i)
+  groblist[[i]] = p1
+}
+
+plot_grid(plotlist = groblist, ncol = 3)
+
+```
+## Read gc content for different categories in Pacbio
+
+```{r, fig.width=20, fig.height=15}
+
+groblist = NULL
+
+for (i in unique(final_table_pb$Sample)){
+  tb = final_table_pb[final_table_pb$Sample == i,] %>% group_by(illStatus) %>% summarise(`average gc` = round(mean(gc),2))
+  p1 = ggplot(final_table_pb[final_table_pb$Sample == i,], aes(gc, color = illStatus)) + geom_density() + labs(x="GC content", color = "category") + annotation_custom(tableGrob(tb), xmin = 0.45, xmax = 0.7, ymin = 7.5, ymax = 10) + scale_color_manual(values = c("#440154FF", "#237D8EFF", "#ffcf20FF")) + theme(text = element_text(size = 15)) + ylim(0,10) + xlim(0,1) + ggtitle(i)
+  groblist[[i]] = p1
+}
+
+plot_grid(plotlist = groblist, ncol = 3)
+```

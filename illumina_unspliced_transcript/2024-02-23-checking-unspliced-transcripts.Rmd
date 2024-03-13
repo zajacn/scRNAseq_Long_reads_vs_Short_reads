@@ -1,0 +1,174 @@
+---
+title:  "Checking unspliced transcripts"
+author: "Natalia Zajac"
+output:
+  html_document: 
+    highlight: pygments
+    theme: sand
+    code_folding: hide
+    toc: yes
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+library(SummarizedExperiment)
+library(plotly)
+library(scater)
+library(ezRun)
+library(DT)
+library(htmltools)
+library(Matrix)
+library(Seurat)
+library(pheatmap)
+library(DropletUtils)
+library(cowplot)
+library(tidyverse)
+library(ggvenn)
+library(patchwork)
+library(UpSetR)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(BiocGenerics)
+
+##Load the pacbio data
+pbDirs <- c("Normal_o31598_1"= "/srv/GT/analysis/zajacn/p28443/p28443_o31598_1/p28443_o31598_1_threecells_getMTinfo/genes_seurat/",
+            "ccRCC_o31598_2"= "/srv/GT/analysis/zajacn/p28443/p28443_o31598_2/p28443_o31598_2_threecells_getMTinfo/genes_seurat/",
+            "ccRCC_o31598_3"="/srv/GT/analysis/zajacn/p28443/p28443_o31598_3/p28443_o31598_3_2_C01_getMTinfo/genes_seurat/",
+            "ccRCC_o31598_4"="/srv/GT/analysis/zajacn/p28443/p28443_o31598_4/p28443_o31598_4_3_D01_getMTinfo/genes_seurat/",
+            "ccRCC_o31598_5"="/srv/GT/analysis/zajacn/p28443/p28443_o31598_5/p28443_o31598_5_4_E01_getMTinfo/genes_seurat/"
+)
+
+pbDirs_unfiltered <- lapply(pbDirs, function(x){
+  str_replace(x, "getMTinfo", "getMTinfo_unfiltered")
+})
+
+pbDirs_filtered_IntraPriming <- lapply(pbDirs, function(x){
+  str_replace(x, "getMTinfo", "getMTinfo_filteredIntraPriming")
+})
+
+pbAnnot = sapply(lapply(str_split(pbDirs, "/"), .subset, 1:8), paste, collapse = "/")
+pbAnnot_unfiltered = sapply(lapply(str_split(pbDirs_unfiltered, "/"), .subset, 1:8), paste, collapse = "/")
+pbAnnot_filteredIP = sapply(lapply(str_split(pbDirs_filtered_IntraPriming, "/"), .subset, 1:8), paste, collapse = "/")
+
+pbAnnot = lapply(pbAnnot, function(x){
+  df = read.csv(paste0(x,"/scisoseq.annotated.info.csv"), sep = "\t")
+})
+
+pbAnnot_unfiltered = lapply(pbAnnot_unfiltered, function(x){
+  df = read.csv(paste0(x,"/scisoseq.annotated.info.csv"), sep = "\t")
+})
+
+pbAnnot_filteredIP = lapply(pbAnnot_filteredIP, function(x){
+  df = read.csv(paste0(x,"/scisoseq.annotated.info.csv"), sep = "\t")
+})
+
+rt = read.delim("../RTswtiching_isoforms.txt", header = F) #preselected from reasons files
+colnames(rt) = c("pbid", "Sample")
+rt$SampleID = case_when(rt$Sample == "Normal" ~ 1, rt$Sample == "ccRCC_2" ~ 2, rt$Sample == "ccRCC_3" ~ 3, rt$Sample == "ccRCC_4" ~ 4, rt$Sample == "ccRCC_5" ~ 5)
+
+for (i in seq(1,5)){
+  pbAnnot_unfiltered[[i]] = pbAnnot_unfiltered[[i]] %>% 
+    mutate(Filtered = case_when(id %in% setdiff(pbAnnot_unfiltered[[i]]$id, pbAnnot_filteredIP[[i]]$id) ~ "filtered for IntraPriming", 
+                                id %in% setdiff(pbAnnot_filteredIP[[i]]$id, pbAnnot[[i]]$id) ~ "filtered for LC/NC",
+                                TRUE ~ "not filtered out"))
+}
+
+for (i in seq(1,5)){
+  rts = rt[rt$SampleID == i,]
+  pbAnnot_unfiltered[[i]] = pbAnnot_unfiltered[[i]] %>% 
+    mutate(Filtered = if_else(pbid %in% rts$pbid, "filtered for RTSwitching", Filtered))
+}
+
+pbAnnot_unfiltered[[1]]$Sample = "G18_626_Normal"
+pbAnnot_unfiltered[[2]]$Sample = "G18_626_ccRCC"
+pbAnnot_unfiltered[[3]]$Sample = "G16_315_ccRCC"
+pbAnnot_unfiltered[[4]]$Sample = "G18_109_ccRCC"
+pbAnnot_unfiltered[[5]]$Sample = "G16_667_ccRCC"
+
+
+df2 = bind_rows(pbAnnot_unfiltered)
+sampleInfo = read.csv("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/2024-01-17-sampleInfo.tsv", sep = "\t")
+```
+
+Subset bam files for the right UMIs, use bam files subsetted for valid cell barcodes - LC/NC
+
+```{r setup, include=FALSE}
+for (i in names(samples)){
+  if (!dir.exists(paste0("2024-02-23-checking-unspliced-transcripts/", i))){
+    dir.create(paste0("2024-02-23-checking-unspliced-transcripts/", i))
+    }else{
+      print("dir exists")
+    }
+  }
+
+for(i in (list.dirs("2024-02-23-checking-unspliced-transcripts", full.names = TRUE, recursive = TRUE)[2])){
+  UMIs=unique(df2[df2$Filtered == "filtered for LC/NC" & df2$Sample == basename(i) & df2$category == "genic", c(10, 12), drop = FALSE])[1:2000, , drop = FALSE]
+  write_delim(UMIs[,c(1), drop = FALSE], paste0("2024-02-23-checking-unspliced-transcripts/", basename(i), "/UMIs.txt"))
+  write_delim(UMIs[,c(2), drop = FALSE], paste0("2024-02-23-checking-unspliced-transcripts/", basename(i), "/Cells.txt"))
+  cmd = paste0("/usr/local/ngseq/packages/Tools/samtools/1.17/bin/samtools view -D UB:", i, "/UMIs.txt") 
+  bam = paste0(dirname(sampleInfo[sampleInfo$Identifier == basename(i),]$PigeonFiltered), "/possorted_genome_bam.filtered.valid_barcodes.bam")
+  grep = paste0("| grep -f ", i, "/Cells.txt")
+  out = paste0(i, "/temp.sam")
+  cmd2 = paste(cmd, bam, grep, ">", out)
+  ezSystem(cmd2)
+  cmd3 = paste("/usr/local/ngseq/packages/Tools/samtools/1.17/bin/samtools view -H", bam, ">", paste0(i, "/header"))
+  ezSystem(cmd3)
+  cmd4 = paste("cat", paste0(i, "/header"), out, ">" , paste0(i, "/temp-ready.sam"))
+  ezSystem(cmd4)
+  cmd5 = paste("/usr/local/ngseq/packages/Tools/samtools/1.17/bin/samtools view -b", paste0(i, "/temp-ready.sam"), ">",  paste0(i, "/LC_NC_tagids.bam"))
+  ezSystem(cmd5)
+}
+```
+
+Subset bam files for the right UMIs, use bam files subsetted for valid cell barcodes - not filtered
+
+```{r setup, include=FALSE}
+
+for(i in (list.dirs("2024-02-23-checking-unspliced-transcripts", full.names = TRUE, recursive = TRUE)[2])){
+  UMIs=unique(df2[df2$Filtered == "not filtered out" & df2$Sample == basename(i) & df2$category == "full-splice_match", c(10, 12), drop = FALSE])[1:1000, , drop = FALSE]
+  write_delim(UMIs[,c(1), drop = FALSE], paste0("2024-02-23-checking-unspliced-transcripts/", basename(i), "/UMIs.txt"))
+  write_delim(UMIs[,c(2), drop = FALSE], paste0("2024-02-23-checking-unspliced-transcripts/", basename(i), "/Cells.txt"))
+  cmd = paste0("/usr/local/ngseq/packages/Tools/samtools/1.17/bin/samtools view -D UB:", i, "/UMIs.txt") 
+  bam = paste0(dirname(sampleInfo[sampleInfo$Identifier == basename(i),]$PigeonFiltered), "/possorted_genome_bam.filtered.valid_barcodes.bam")
+  grep = paste0("| grep -f ", i, "/Cells.txt")
+  out = paste0(i, "/temp.sam")
+  cmd2 = paste(cmd, bam, grep, ">", out)
+  ezSystem(cmd2)
+  cmd3 = paste("/usr/local/ngseq/packages/Tools/samtools/1.17/bin/samtools view -H", bam, ">", paste0(i, "/header"))
+  ezSystem(cmd3)
+  cmd4 = paste("cat", paste0(i, "/header"), out, ">" , paste0(i, "/temp-ready.sam"))
+  ezSystem(cmd4)
+  cmd5 = paste("/usr/local/ngseq/packages/Tools/samtools/1.17/bin/samtools view -b", paste0(i, "/temp-ready.sam"), ">",  paste0(i, "/not_filtered_tagids.bam"))
+  ezSystem(cmd5)
+}
+```
+
+Load the bam file and check for unspliced reads
+
+```{r setup, include=FALSE}
+gtffile = "/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/sl_unzip_datasets/5c640510-4bee-4ae8-b642-48ed209b79bb/call-unzip_datasets/execution/gencode.v39.annotation.sorted.gtf"
+
+gtf <- rtracklayer::import(gtffile)
+gtfExon <- gtf[gtf$type == "exon" & gtf$gene_type == "protein_coding", ]
+trRangesList <- split(gtfExon, gtfExon$transcript_id)
+
+for(i in (list.dirs("2024-02-23-checking-unspliced-transcripts", full.names = TRUE, recursive = TRUE)[2:6])){
+    illBam = paste0(i, "/LC_NC_tagids.bam")
+    system.time({
+        sbp <- ScanBamParam(what =  c("qname", "seq"), tag = c("GN", "xf", "CB", "UB", "ts", "pa", "RE"))
+        illGa <- readGAlignments(illBam, param = sbp)
+    })
+    mcols(illGa)$CB <- sub("-1", "", mcols(illGa)$CB)
+    mcols(illGa)$tagId <- paste(mcols(illGa)$CB, mcols(illGa)$UB)
+    UMIs=unique(df2[df2$Filtered == "filtered for LC/NC" & df2$Sample == basename(i) & df2$category == "genic", c(10,12), drop = FALSE])[1:2000, , drop = FALSE]
+    UMIs$tagId = paste(UMIs$BCrev, UMIs$UMIrev)
+    illGa = illGa[mcols(illGa)$tagId %in% UMIs$tagId]
+    illGa = illGa[!duplicated(mcols(illGa)$tagId)]
+    mcols(illGa)$isTranscriptCompatible <- countCompatibleOverlaps(illGa, trRangesList) >= 1
+    print(table(mcols(illGa)$isTranscriptCompatible))
+}
+```
+

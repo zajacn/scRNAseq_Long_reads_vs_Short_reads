@@ -1,0 +1,389 @@
+---
+title:  "p28443 Multimapping reads and some UMI stats"
+author: "Natalia Zajac"
+output:
+  html_document: 
+    highlight: pygments
+    theme: sand
+    code_folding: hide
+    toc: yes
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r, message=FALSE, warning=FALSE}
+library(Seurat)
+library(HDF5Array)
+library(ezRun)
+library(RColorBrewer)
+library(SingleCellExperiment)
+library(pheatmap)
+library(DropletUtils)
+library(scuttle)
+library(BiocParallel)
+library(data.table)
+library(ggplot2)
+library(ezRun)
+library(Seurat)
+library(tidyverse)
+library(Rsamtools)
+library(GenomicAlignments)
+library(cowplot)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, knitr.table.format = "html")
+param <- list(cores = 8, npcs = 20, minMapQuality=0, keepMultiHits=TRUE)
+clusterResolution <- 1
+BPPARAM <- MulticoreParam(workers = param$cores)
+register(BPPARAM)
+
+```
+
+# {.tabset}
+## Datasets
+
+Load the bam files subsetted as part of [Hubert's script](https://gitlab.bfabric.org/Genomics/p28443_singlecell_pacbiovsillumina/-/blob/main/2024-01-18-overlap-reads-subset-cell.Rmd?ref_type=heads)
+
+```{r}
+
+illBam <- paste0("/scratch/zajacn/p28443/", sm, "-AA.bam")
+
+system.time({
+  sbp <- ScanBamParam(what =  c("qname", "seq"), tag = c("GN", "xf", "CB", "UB", "UR", "ts", "pa", "RE", "NH"))
+  illGa <- readGAlignments(illBam, param = sbp)
+})
+mcols(illGa)$CB <- sub("-1", "", mcols(illGa)$CB)
+use <- is.na(mcols(illGa)$UB)
+mcols(illGa)$UB[use] <- mcols(illGa)$UR[use]
+mcols(illGa)$UR <- NULL
+
+#illGa
+```
+
+Plus get the unaligned reads.
+
+```{r}
+system.time({
+  sbp <- ScanBamParam(what = c("qname", "seq"), tag = c("xf", "CB", "UB", "ts", "pa"), scanBamFlag(isUnmappedQuery = TRUE))
+  illBamList <- scanBam(illBam, param = sbp)[[1]]
+})
+illBamList$tag$CB <- sub("-1", "", illBamList$tag$CB)
+illUnmapped <- cbind(qname=illBamList$qname, data.frame(illBamList$tag))
+```
+
+Load the Pacbio data and keep only same cells in all datasets
+
+```{r}
+
+pbbam <- sampleInfo$IsoSeqBam
+
+system.time({
+  sbp <- ScanBamParam(what = c("qname", "seq"), tag = c( "CB", "XM"), tagFilter=list(rc=1))
+  pbGa <- readGAlignments(pbbam, param = sbp)
+})
+
+use <- (mcols(pbGa)$CB %>% DNAStringSet() %>% reverseComplement() %>% as.character() ) %in%  mcols(illGa)$CB
+pbGa <- pbGa[use]
+
+pbdir <- sampleInfo$PigeonUnfiltered
+pbAnno <- data.table::fread(file.path(pbdir, "scisoseq.annotated.info.csv"), sep="\t")
+pbAnno <- pbAnno[pbAnno$BCrev %in% mcols(illGa)$CB, ]
+use <- mcols(illGa)$CB %in% pbAnno$BCrev
+illGa <- illGa[use]
+illUnmapped <- illUnmapped[illUnmapped$CB %in% pbAnno$BCrev, ]
+```
+Summary:
+
+Illumina number of cells: `r length(unique(mcols(illGa)$CB))`.  
+Pacbio number of cells: `r length(unique(mcols(pbGa)$CB))`.  
+Illumina number of UMIs: `r length(unique(mcols(illGa)$UB))`.  
+Pacbio number of UMIs: `r length(unique(mcols(pbGa)$XM))`.  
+
+```{r, fig.height=5, fig.width=5}
+x = merge(data.frame(mcols(illGa)) %>% group_by(CB) %>% summarise(Illumina_UMI = n_distinct(UB)), data.frame(mcols(pbGa)) %>% group_by(CB) %>% summarise(Pacbio_UMI = n_distinct(XM)) %>% mutate(CB= as.character(reverseComplement(DNAStringSet(CB)))), by = "CB") 
+ezXYScatter(x$Pacbio_UMI, x$Illumina_UMI, xlab = "Pacbio", ylab = "Illumina", main = "Number of UMIs per cell")
+```
+
+## Multimapping reads {.tabset}
+
+### Proportion of multimapping reads - pacbio
+
+```{r, fig.height=5, fig.width=6}
+library(ggrepel)
+library(ggpp)
+
+mcols(pbGa)$isDuplicated = ""
+mcols(pbGa)[mcols(pbGa)$qname %in% unique(mcols(pbGa[duplicated(mcols(pbGa)$qname)])$qname),]$isDuplicated =  "Multimapping"
+mcols(pbGa)[mcols(pbGa)$isDuplicated == "",]$isDuplicated = "Uniquely mapping"
+
+ggplot(data.frame(mcols(pbGa)) %>% group_by(isDuplicated) %>% summarise(count = n_distinct(qname)) %>% mutate(percentage = count/sum(count) * 100), aes(x="", y=percentage, fill=isDuplicated)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  geom_label_repel(aes(label = paste0(round(percentage,1), "%")),position = position_stacknudge(vjust = 0.5, x = 0.8), max.overlaps = 30, size = 9, show.legend = FALSE) +
+  theme_void() +
+  theme(strip.text = element_text(size=25),legend.title=element_blank(), legend.position="bottom", legend.text = element_text(size = 15))
+```
+
+### Proportion of multimapping reads - illumina
+
+```{r, fig.height=5, fig.width=6}
+library(ggrepel)
+library(ggpp)
+
+mcols(illGa)$isDuplicated = ""
+mcols(illGa[mcols(illGa)$NH == 1,])$isDuplicated = "Uniquely mapping"
+mcols(illGa[mcols(illGa)$NH > 1,])$isDuplicated = "Multimapping"
+
+ggplot(data.frame(mcols(illGa)) %>% group_by(isDuplicated) %>% summarise(count = n_distinct(qname)) %>% mutate(percentage = count/sum(count) * 100), aes(x="", y=percentage, fill=isDuplicated)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  geom_label_repel(aes(label = paste0(round(percentage,1), "%")),position = position_stacknudge(vjust = 0.5, x = 0.8), max.overlaps = 30, size = 9, show.legend = FALSE) +
+  theme_void() +
+  theme(strip.text = element_text(size=25),legend.title=element_blank(), legend.position="bottom", legend.text = element_text(size = 15))
+```
+
+### Combining Pacbio and Illumina BC_UMI
+
+Combine Illumina and Pacbio UMI_Cells to compare the mapping
+
+```{r, fig.height=5, fig.width=10}
+stopifnot(pbAnno$id %in% mcols(pbGa)$qname)
+idx <- match(mcols(pbGa)$qname, pbAnno$id)
+mcols(pbGa)$tagId <- paste(as.character(reverseComplement(DNAStringSet(mcols(pbGa)$CB))),
+                           as.character(reverseComplement(DNAStringSet(mcols(pbGa)$XM))))
+mcols(pbGa)$category <- pbAnno$category[idx]
+mcols(pbGa)$category[is.na(mcols(pbGa)$category)] <- "unannotated"
+mcols(pbGa)$gene <- pbAnno$gene[idx]
+mcols(pbGa)$length <- pbAnno$length[idx]
+
+mcols(illGa)$tagId <- paste(mcols(illGa)$CB, mcols(illGa)$UB)
+illUnmapped$tagId <- paste(illUnmapped$CB, illUnmapped$UB)
+
+commonTagIds <- intersect(mcols(pbGa)$tagId, mcols(illGa)$tagId)
+illRgs <- illGa[match(commonTagIds, mcols(illGa)$tagId)]
+pbRgs <- pbGa[match(commonTagIds, mcols(pbGa)$tagId)]
+
+print(length(commonTagIds))
+```
+
+```{r, fig.height=5, fig.width=10}
+
+illRgs_counted <- illRgs[mcols(illRgs)$xf == "25",]
+pbRgs_counted <- pbRgs[mcols(pbRgs)$qname %in% pbAnnofill$id]
+
+print(length(intersect(mcols(illRgs_counted)$tagId, mcols(pbRgs_counted)$tagId)))
+```
+
+Overlap
+
+```{r, fig.height=5, fig.width=10}
+vennFromSets(list(illUnmapped=unique(illUnmapped$tagId), illMapped=unique(mcols(illGa)$tagId), pb=unique(mcols(pbGa)$tagId)))
+```
+
+From those, select only those that are counted to the gene matrix (xf=25 or reads in scisoseq.annotated.info.csv in filtered)
+
+```{r, fig.height=5, fig.width=10}
+vennFromSets(list(illUnmapped=unique(illUnmapped$tagId), illMapped=unique(mcols(illRgs_counted)$tagId), pb=unique(mcols(pbRgs_counted)$tagId)))
+```
+
+
+Categories of reads from the overlap
+
+
+```{r, fig.height=5, fig.width=10}
+melt(
+  merge(
+    data.frame(pbGa[mcols(pbGa)$tagId %in% setdiff(intersect(unique(illUnmapped$tagId), unique(mcols(pbGa)$tagId)), intersect(unique(mcols(illGa)$tagId), unique(mcols(pbGa)$tagId)))]) %>% group_by(category) %>% summarise('Unmapped by Illumina' = n_distinct(qname)), #category of  reads that were mapped by pacbio but not by Illumina
+    data.frame(pbGa[mcols(pbGa)$tagId %in% setdiff(intersect(unique(mcols(illGa)$tagId), unique(mcols(pbGa)$tagId)), intersect(unique(illUnmapped$tagId), unique(mcols(pbGa)$tagId)))]) %>% group_by(category) %>% summarise('Mapped by Illumina' = n_distinct(qname)), by = "category" #category of  reads that were mapped by Illumina as well (that are not overlapping with the unmapped category)
+    )
+  ) %>%
+  ggplot(aes(variable, value, fill = category)) + geom_col(position = "stack")
+```
+
+
+```{r, fig.height=5, fig.width=10}
+melt(
+  merge(
+    data.frame(pbGa[mcols(pbGa)$tagId %in% setdiff(intersect(unique(illUnmapped$tagId), unique(mcols(pbGa)$tagId)), intersect(unique(mcols(illGa)$tagId), unique(mcols(pbGa)$tagId)))]) %>% group_by(category) %>% summarise('Unmapped by Illumina' = n_distinct(qname)), #category of  reads that were mapped by pacbio but not by Illumina
+    data.frame(pbGa[mcols(pbGa)$tagId %in% setdiff(intersect(unique(mcols(illGa)$tagId), unique(mcols(pbGa)$tagId)), intersect(unique(illUnmapped$tagId), unique(mcols(pbGa)$tagId)))]) %>% group_by(category) %>% summarise('Mapped by Illumina' = n_distinct(qname)), by = "category" #category of  reads that were mapped by Illumina as well (that are not overlapping with the unmapped category)
+    )
+  ) %>%
+  ggplot(aes(variable, value, fill = category)) + geom_col(position = "fill")
+```
+
+### Proportion of multimapping reads - combined data
+
+From the common BC_UMIs in the mapped reads - how many are multimapping: Percentages 
+
+```{r, fig.height=5, fig.width=10}
+merge(data.frame(mcols(illRgs)), data.frame(mcols(pbRgs)), by = "tagId") %>% 
+  mutate(Multimap = case_when(isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Uniquely mapping" ~ "Both uniquely mapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Uniquely mapping" ~ "Illumina multimapping Pacbio uniquely mapping", isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Multimapping" ~ "Pacbio multimapping Illumina uniquely mapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping")) %>% 
+  group_by(Multimap) %>% 
+  summarise(count = n_distinct(tagId)) %>% 
+  mutate(percentage = count/sum(count) * 100) %>% 
+  ggplot(aes(x="", y=percentage, fill=Multimap)) +
+    geom_bar(stat="identity", width=1, color="white") +
+    coord_polar("y", start=0) +
+    geom_label_repel(aes(label = paste0(round(percentage,1), "%")),position = position_stacknudge(vjust = 0.5, x = 0.8), max.overlaps = 30, size = 9, show.legend = FALSE) +
+    theme_void() +
+    theme(strip.text = element_text(size=25),legend.title=element_blank(), legend.position="right", legend.text = element_text(size = 15))
+```
+
+
+```{r, fig.height=5, fig.width=10}
+merge(data.frame(mcols(illRgs_counted)), data.frame(mcols(pbRgs_counted)), by = "tagId", all = TRUE) %>% 
+  mutate(Multimap = case_when(isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Uniquely mapping" ~ "Both uniquely mapping", 
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", 
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Uniquely mapping" ~ "Illumina multimapping Pacbio uniquely mapping",
+                              isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Multimapping" ~ "Pacbio multimapping Illumina uniquely mapping",
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", 
+                              is.na(isDuplicated.x) ~ "not counted in Illumina", 
+                              is.na(isDuplicated.y) ~ "not counted in Pacbio")) %>% 
+  group_by(Multimap) %>% 
+  summarise(count = n_distinct(tagId)) %>% 
+  mutate(percentage = count/sum(count) * 100) %>% 
+  ggplot(aes(x="", y=percentage, fill=Multimap)) +
+    geom_bar(stat="identity", width=1, color="white") +
+    coord_polar("y", start=0) +
+    geom_label_repel(aes(label = paste0(round(percentage,1), "%")),position = position_stacknudge(vjust = 0.5, x = 0.8), max.overlaps = 30, size = 9, show.legend = FALSE) +
+    theme_void() +
+    theme(strip.text = element_text(size=25),legend.title=element_blank(), legend.position="right", legend.text = element_text(size = 15))
+```
+
+From the common BC_UMIs in the mapped reads - how many are multimapping: Absolute 
+
+```{r, fig.height=5, fig.width=10}
+
+merge(data.frame(mcols(illRgs)), data.frame(mcols(pbRgs)), by = "tagId") %>% 
+  mutate(Multimap = case_when(isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Uniquely mapping" ~ "Both uniquely mapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Uniquely mapping" ~ "Illumina multimapping Pacbio uniquely mapping", isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Multimapping" ~ "Pacbio multimapping Illumina uniquely mapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping")) %>% 
+  group_by(Multimap) %>% 
+  summarise(count = n_distinct(tagId)) %>% 
+  mutate(percentage = count/sum(count) * 100) %>% 
+  ggplot(aes(x="", y=count, fill=Multimap)) +
+    geom_bar(stat="identity", width=1, color="white") +
+    coord_polar("y", start=0) +
+    geom_label_repel(aes(label = round(count,1)),position = position_stacknudge(vjust = 0.5, x = 0.8), max.overlaps = 30, size = 9, show.legend = FALSE) +
+    theme_void() +
+    theme(strip.text = element_text(size=25),legend.title=element_blank(), legend.position="right", legend.text = element_text(size = 15))
+```
+
+
+```{r, fig.height=5, fig.width=10}
+
+merge(data.frame(mcols(illRgs_counted)), data.frame(mcols(pbRgs_counted)), by = "tagId", all = TRUE) %>% 
+  mutate(Multimap = case_when(isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Uniquely mapping" ~ "Both uniquely mapping", 
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", 
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Uniquely mapping" ~ "Illumina multimapping Pacbio uniquely mapping",
+                              isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Multimapping" ~ "Pacbio multimapping Illumina uniquely mapping",
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", 
+                              is.na(isDuplicated.x) ~ "not counted in Illumina", 
+                              is.na(isDuplicated.y) ~ "not counted in Pacbio")) %>% 
+  group_by(Multimap) %>% 
+  summarise(count = n_distinct(tagId)) %>% 
+  mutate(percentage = count/sum(count) * 100) %>% 
+  ggplot(aes(x="", y=count, fill=Multimap)) +
+    geom_bar(stat="identity", width=1, color="white") +
+    coord_polar("y", start=0) +
+    geom_label_repel(aes(label = round(count,1)),position = position_stacknudge(vjust = 0.5, x = 0.8), max.overlaps = 30, size = 9, show.legend = FALSE) +
+    theme_void() +
+    theme(strip.text = element_text(size=25),legend.title=element_blank(), legend.position="right", legend.text = element_text(size = 15))
+```
+
+
+What are the functional categories of those different reads?
+
+```{r, fig.height=10, fig.width=20}
+
+merge(data.frame(mcols(illRgs)), data.frame(mcols(pbRgs)), by = "tagId") %>% 
+    mutate(Multimap = case_when(isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Uniquely mapping" ~ "Both uniquely mapping", 
+                                isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", 
+                                isDuplicated.x== "Multimapping" & isDuplicated.y == "Uniquely mapping" ~ "Illumina multimapping Pacbio uniquely mapping", 
+                                isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Multimapping" ~ "Pacbio multimapping Illumina uniquely mapping", 
+                                isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping")) %>% 
+    group_by(category, Multimap) %>% 
+    summarise(count = n_distinct(tagId)) %>% ggplot(aes(Multimap, count, fill = category)) + geom_col(position = "stack") + theme(axis.text.x = element_text(size = 15, angle = 45, vjust = 0.5, hjust=0.5), legend.text = element_text(size = 18), axis.text.y = element_text(size = 11))
+```
+
+```{r, fig.height=10, fig.width=20}
+
+merge(data.frame(mcols(illRgs_counted)), data.frame(mcols(pbRgs_counted)), by = "tagId", all = TRUE) %>% 
+  mutate(Multimap = case_when(isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Uniquely mapping" ~ "Both uniquely mapping", 
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", 
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Uniquely mapping" ~ "Illumina multimapping Pacbio uniquely mapping",
+                              isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Multimapping" ~ "Pacbio multimapping Illumina uniquely mapping",
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", 
+                              is.na(isDuplicated.x) ~ "not counted in Illumina", 
+                              is.na(isDuplicated.y) ~ "not counted in Pacbio")) %>% 
+    group_by(category, Multimap) %>% 
+    summarise(count = n_distinct(tagId)) %>% ggplot(aes(Multimap, count, fill = category)) + geom_col(position = "stack") + theme(axis.text.x = element_text(size = 15, angle = 45, vjust = 0.5, hjust=0.5), legend.text = element_text(size = 18), axis.text.y = element_text(size = 11))
+```
+
+
+```{r, fig.height=10, fig.width=20}
+
+merge(data.frame(mcols(illRgs)), data.frame(mcols(pbRgs)), by = "tagId") %>% 
+    mutate(Multimap = case_when(isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Uniquely mapping" ~ "Both uniquely mapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Uniquely mapping" ~ "Illumina multimapping Pacbio uniquely mapping", isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Multimapping" ~ "Pacbio multimapping Illumina uniquely mapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping")) %>% 
+    group_by(category, Multimap) %>% 
+    summarise(count = n_distinct(tagId)) %>% ggplot(aes(Multimap, count, fill = category)) + geom_col(position = "fill") + theme(axis.text.x = element_text(size = 15, angle = 45, vjust = 0.5, hjust=0.5), legend.text = element_text(size = 18), axis.text.y = element_text(size = 11))
+```
+
+
+```{r, fig.height=10, fig.width=20}
+
+merge(data.frame(mcols(illRgs_counted)), data.frame(mcols(pbRgs_counted)), by = "tagId", all = TRUE) %>% 
+  mutate(Multimap = case_when(isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Uniquely mapping" ~ "Both uniquely mapping", 
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", 
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Uniquely mapping" ~ "Illumina multimapping Pacbio uniquely mapping",
+                              isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Multimapping" ~ "Pacbio multimapping Illumina uniquely mapping",
+                              isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", 
+                              is.na(isDuplicated.x) ~ "not counted in Illumina", 
+                              is.na(isDuplicated.y) ~ "not counted in Pacbio")) %>% 
+    group_by(category, Multimap) %>% 
+    summarise(count = n_distinct(tagId)) %>% ggplot(aes(Multimap, count, fill = category)) + geom_col(position = "fill") + theme(axis.text.x = element_text(size = 15, angle = 45, vjust = 0.5, hjust=0.5), legend.text = element_text(size = 18), axis.text.y = element_text(size = 11))
+```
+
+
+### Ranges overlap
+
+How many Illumina reads overlap with Pacbio reads? Multimapping reads, mostly from Illumina, reduce the ranges overlap
+
+```{r, fig.height=10, fig.width=15}
+xf = merge(data.frame(mcols(illRgs)), data.frame(mcols(pbRgs)), by = "tagId") %>% 
+    mutate(Multimap = case_when(isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Uniquely mapping" ~ "Both uniquely mapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Uniquely mapping" ~ "Illumina multimapping Pacbio uniquely mapping", isDuplicated.x== "Uniquely mapping" & isDuplicated.y == "Multimapping" ~ "Pacbio multimapping Illumina uniquely mapping", isDuplicated.x== "Multimapping" & isDuplicated.y == "Multimapping" ~ "Both multimapping")) %>% dplyr::select(tagId, Multimap)
+
+groblist = NULL
+
+ovlStatus <- poverlaps(granges(illGa[match(commonTagIds, mcols(illGa)$tagId)]),
+                       granges(pbGa[match(commonTagIds, mcols(pbGa)$tagId)]),
+                       type="within")
+p1 = data.frame(table(ovlStatus)) %>% 
+  ggplot(aes(x="", y=Freq, fill=ovlStatus)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  geom_label_repel(aes(label = round(Freq,1)),position = position_stacknudge(vjust = 0.5, x = 0.8), max.overlaps = 30, size = 9, show.legend = FALSE) +
+  theme_void() +
+  theme(strip.text = element_text(size=25),legend.title=element_blank(), legend.position="right", legend.text = element_text(size = 15)) +
+  ggtitle("All common BC_UMIs")
+
+groblist[["All"]] = p1
+
+for (i in unique(xf$Multimap)){
+  typexf = xf[xf$Multimap == i,]$tagId
+  ovlStatus <- poverlaps(granges(illGa[match(typexf, mcols(illGa)$tagId)]),
+                       granges(pbGa[match(typexf, mcols(pbGa)$tagId)]),
+                       type="within")
+  p1 = data.frame(table(ovlStatus)) %>% 
+    ggplot(aes(x="", y=Freq, fill=ovlStatus)) +
+    geom_bar(stat="identity", width=1, color="white") +
+    coord_polar("y", start=0) +
+    geom_label_repel(aes(label = round(Freq,1)),position = position_stacknudge(vjust = 0.5, x = 0.8), max.overlaps = 30, size = 9, show.legend = FALSE) +
+    theme_void() +
+    theme(strip.text = element_text(size=25),legend.title=element_blank(), legend.position="right", legend.text = element_text(size = 15)) +
+    ggtitle(i)
+  groblist[[i]] = p1
+}
+
+plot_grid(plotlist = groblist)
+
+```
+
