@@ -1,0 +1,871 @@
+---
+title:  "p28443 PacBio filtering analysis"
+author: "Natalia Zajac"
+output:
+  html_document: 
+    highlight: pygments
+    theme: sand
+    code_folding: hide
+    toc: yes
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+---
+
+Started on `r format(Sys.time(), "%Y-%m-%d %H:%M:%S")`
+
+```{r setup, include=FALSE}
+library(SummarizedExperiment)
+library(plotly)
+library(scater)
+library(ezRun)
+library(DT)
+library(htmltools)
+library(Matrix)
+library(Seurat)
+library(pheatmap)
+library(DropletUtils)
+library(cowplot)
+library(tidyverse)
+library(ggvenn)
+library(patchwork)
+library(UpSetR)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(BiocGenerics)
+library(cowplot)
+library(gridExtra)
+library(ggbeeswarm)
+source("functions.R")
+sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
+##Load all pacbio dirs
+pbDirs <- file.path(sample_data$PigeonFiltered, "genes_seurat/")
+
+geneAnno <- ezRead.table("/srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/SMRTLink11.1_annotation/genes_annotation_byGene.txt")
+#Read in mtcontent from Hubert
+mtcontent = read.csv("mito_content.csv")
+
+##Pacbio create seurat object
+seurat_pbDataList <- lapply(pbDirs, function(pbDir){
+  cts <- Read10X(pbDir, gene.column = 1)
+  featInfo <- ezRead.table(paste0(pbDir, "/genes.tsv"), header = FALSE, row.names = NULL) # , col_names = FALSE)
+  colnames(featInfo) <- c("gene_id", "gene_name")
+  featInfo <- featInfo[featInfo$gene_name %in% geneAnno[geneAnno$type == "protein_coding",]$gene_name, ]
+  featInfo <- featInfo[!grepl("(?i)^MT-", featInfo$gene_name),]
+  featInfo$isRiboprot <- grepl("(?i)^RPS|^RPL", featInfo$gene_name)
+  geneInfo <- featInfo
+  ctsGene <- averageRows(cts[featInfo$gene_id,], by = geneInfo$gene_name, func = sum) %>% 
+    as.matrix() %>% as("dgCMatrix")
+  fixed <- sub("-1", "", colnames(ctsGene)) %>% DNAStringSet() %>%
+    reverseComplement() %>% as.character()
+  colnames(ctsGene) <- fixed
+  seurat_object = CreateSeuratObject(ctsGene)
+  seurat_object <- PercentageFeatureSet(seurat_object, "(?i)^RPS|^RPL", col.name = "percent_ribo")
+  samplename = sample_data[sample_data$PigeonFiltered == str_remove(pbDir, "/genes_seurat/"),]$Name
+  mt = mtcontent[mtcontent$Barcode %in% colnames(seurat_object) & mtcontent$Sample == samplename,]
+  seurat_object$percent_mito = setNames(mt[, c(4)], mt[, c(3)])
+  return(seurat_object)
+})
+
+names(seurat_pbDataList) = sample_data$Name
+
+pbDirs_unfiltered <- file.path(sample_data$PigeonUnfiltered, "genes_seurat/")
+seurat_pbDataList_unfiltered <- lapply(pbDirs_unfiltered, function(pbDir){
+  cts <- Read10X(pbDir, gene.column = 1)
+  featInfo <- ezRead.table(paste0(pbDir, "/genes.tsv"), header = FALSE, row.names = NULL) # , col_names = FALSE)
+  colnames(featInfo) <- c("gene_id", "gene_name")
+  featInfo <- featInfo[featInfo$gene_name %in% geneAnno[geneAnno$type == "protein_coding",]$gene_name, ]
+  featInfo <- featInfo[!grepl("(?i)^MT-", featInfo$gene_name),]
+  featInfo$isRiboprot <- grepl("(?i)^RPS|^RPL", featInfo$gene_name)
+  geneInfo <- featInfo
+  ctsGene <- averageRows(cts[featInfo$gene_id,], by = geneInfo$gene_name, func = sum) %>% 
+    as.matrix() %>% as("dgCMatrix")
+  fixed <- sub("-1", "", colnames(ctsGene)) %>% DNAStringSet() %>%
+    reverseComplement() %>% as.character()
+  colnames(ctsGene) <- fixed
+  seurat_object = CreateSeuratObject(ctsGene)
+  seurat_object <- PercentageFeatureSet(seurat_object, "(?i)^RPS|^RPL", col.name = "percent_ribo")
+  samplename = sample_data[sample_data$PigeonUnfiltered == str_remove(pbDir, "/genes_seurat/"),]$Name
+  mt = mtcontent[mtcontent$Barcode %in% colnames(seurat_object) & mtcontent$Sample == samplename,]
+  seurat_object$percent_mito = setNames(mt[, c(4)], mt[, c(3)])
+  return(seurat_object)
+})
+names(seurat_pbDataList_unfiltered) = sample_data$Name
+
+illDirs <- file.path("/srv/gstore/projects", sample_data$CellRangerNoIntron, "filtered_feature_bc_matrix/")
+
+## Create a seurat object Illumina
+seurat_IllDataList <- lapply(illDirs, function(crDir){
+  cts_Illumina <- Read10X(crDir, gene.column = 1)
+  featInfo <- ezRead.table(paste0(crDir, "/features.tsv.gz"), header = FALSE, row.names = NULL) # , col_names = FALSE)
+  colnames(featInfo) <- c("gene_id", "gene_name", "type")
+  featInfo <- featInfo[featInfo$gene_name %in% geneAnno[geneAnno$type == "protein_coding",]$gene_name, ]
+  featInfo <- featInfo[!grepl("(?i)^MT-", featInfo$gene_name),]
+  featInfo$isRiboprot <- grepl("(?i)^RPS|^RPL", featInfo$gene_name)
+  geneInfoCr <- featInfo
+  ctsGeneCr <- averageRows(cts_Illumina[featInfo$gene_id,], by = geneInfoCr$gene_name, func = sum) %>% as.matrix() %>% 
+    as("dgCMatrix")
+  seurat_object_Illumina =  CreateSeuratObject(ctsGeneCr)
+  seurat_object_Illumina <- PercentageFeatureSet(seurat_object_Illumina, "(?i)^RPS|^RPL", col.name = "percent_ribo")
+  colnames(seurat_object_Illumina) = sapply(str_split(colnames(seurat_object_Illumina), "-"), .subset, 1)
+  samplename = sample_data[sample_data$CellRangerNoIntron == str_remove(str_remove(crDir, "/srv/gstore/projects/"), "/filtered_feature_bc_matrix/"),]$Name
+  mt = mtcontent[mtcontent$Barcode %in% colnames(seurat_object_Illumina) & mtcontent$Sample == samplename,]
+  seurat_object_Illumina$percent_mito = setNames(mt[, c(5)], mt[, c(3)])
+  return(seurat_object_Illumina)
+})
+
+names(seurat_IllDataList) = names(seurat_pbDataList)
+
+#Read in cell annotations from Tülay
+cellAnnot <- read.delim("/srv/GT/analysis/zajacn/p28443/ccRCC_CellType.tsv")
+cellAnnot$CellBarcode <- reverseComplement(DNAStringSet(str_remove(cellAnnot$CellBarcode, "-1"))) %>% as.character()
+cellAnnot = rbind(cellAnnot, data.frame("CellType" = "non-ccRCC", "CellBarcode" = "CTATCCGGTCACCTTC", "Sample" = "ccRCC_4"))
+cellAnnot = rbind(cellAnnot, data.frame("CellType" = rep("non-ccRCC", length(colnames(seurat_pbDataList$ccRCC_3))), "CellBarcode" = colnames(seurat_pbDataList$ccRCC_3), "Sample" = rep("ccRCC_3", length(colnames(seurat_pbDataList$ccRCC_3)))))
+cellAnnot = rbind(cellAnnot, data.frame("CellType" = rep("non-ccRCC", length(colnames(seurat_pbDataList$Normal))), "CellBarcode" = colnames(seurat_pbDataList$Normal), "Sample" = rep("Normal", length(colnames(seurat_pbDataList$Normal)))))
+
+
+##Merge based on common cells and protein coding genes
+pvalue_allMarkers <- 0.05
+assay= "RNA"
+vars.to.regress <- NULL
+
+merged_data = NULL
+for (i in names(seurat_pbDataList)){
+  cellAnnotX = cellAnnot[cellAnnot$Sample == i,]
+  commonIds = intersect(colnames(seurat_IllDataList[[i]]), colnames(seurat_pbDataList[[i]]))
+  
+  scDataIll = seurat_IllDataList[[i]][, commonIds]
+  scDataIll = scDataIll[!grepl("(?i)^MT-", rownames(scDataIll) ),]
+  scDataIll@meta.data$annotation = cellAnnotX[match(colnames(scDataIll), cellAnnotX$CellBarcode),]$CellType
+  scDataIll <- NormalizeData(scDataIll, normalization.method = "LogNormalize", scale.factor=10000, verbose=FALSE)
+  scDataIll <- FindVariableFeatures(scDataIll, selection.method = "vst", nfeatures = 3000)
+  scDataIll <- ScaleData(scDataIll, verbose = FALSE, do.scale=FALSE)
+  scDataIll <- SCTransform(scDataIll, vst.flavor="v2", seed.use = 38, vars.to.regress = vars.to.regress, assay = assay, verbose = FALSE, return.only.var.genes=FALSE)
+  scDataIll <- RunPCA(scDataIll, npcs =30, verbose = FALSE)
+  scDataIll <- RunUMAP(scDataIll, reduction = "pca", dims = 1:30)
+  scDataIll <- RunTSNE(scDataIll, reduction = "pca", dims = 1:30)
+  scDataIll <- FindNeighbors(scDataIll, reduction = "pca", dims = 1:30)
+  scDataIll <- FindClusters(scDataIll, resolution = 0.55, verbose=FALSE)
+  scDataIll$Sample <- i
+  scDataIll$Condition <- scDataIll$Sample
+  scDataIll$sample_seurat_clusters <- paste0(scDataIll$Sample, "-", sprintf("%02d", scDataIll$seurat_clusters))
+  scDataIll$Batch = "Illumina"
+  
+  scDataPB = seurat_pbDataList[[i]][, commonIds]
+  scDataPB = scDataPB[!grepl("(?i)^MT-", rownames(scDataPB) ),]
+  scDataPB@meta.data$annotation = cellAnnotX[match(colnames(scDataPB), cellAnnotX$CellBarcode),]$CellType
+  scDataPB <- NormalizeData(scDataPB, normalization.method = "LogNormalize", scale.factor=10000, verbose=FALSE)
+  scDataPB <- FindVariableFeatures(scDataPB, selection.method = "vst", nfeatures = 3000)
+  scDataPB <- ScaleData(scDataPB, verbose = FALSE, do.scale=FALSE)
+  scDataPB <- SCTransform(scDataPB, vst.flavor="v2", seed.use = 38, vars.to.regress = vars.to.regress, assay = assay, verbose = FALSE, return.only.var.genes=FALSE)
+  scDataPB <- RunPCA(scDataPB, npcs =30, verbose = FALSE)
+  scDataPB <- RunUMAP(scDataPB, reduction = "pca", dims = 1:30)
+  scDataPB <- RunTSNE(scDataPB, reduction = "pca", dims = 1:30)
+  scDataPB <- FindNeighbors(scDataPB, reduction = "pca", dims = 1:30)
+  scDataPB <- FindClusters(scDataPB, resolution = 0.55, verbose=FALSE)
+  scDataPB$Sample <- i
+  scDataPB$Condition <- scDataPB$Sample
+  scDataPB$sample_seurat_clusters <- paste0(scDataPB$Sample, "-", sprintf("%02d", scDataPB$seurat_clusters))
+  scDataPB$Batch = "PacBio"
+  
+  scDatalist = list("Illumina" = scDataIll, "PacBio" = scDataPB)
+  scData = merge(x=scDataIll, y=scDataPB, merge.data=TRUE)
+  VariableFeatures(scData) <- unlist(lapply(scDatalist, VariableFeatures))
+  scData <- RunPCA(object=scData, npcs = 30, verbose=FALSE)
+  scData <- RunTSNE(object = scData, reduction = "pca", dims = 1:30)
+  scData <- RunUMAP(object=scData, reduction = "pca", dims = 1:30)
+  scData <- FindNeighbors(object = scData, reduction = "pca", dims = 1:30, verbose=FALSE)
+  scData <- FindClusters(object=scData, resolution = 0.55, verbose=FALSE)
+  scData <- PrepSCTFindMarkers(scData)
+  markers <- FindAllMarkers(object=scData, test.use = "wilcox", only.pos=TRUE)
+  markers <- markers[ ,c("gene","cluster","pct.1", "pct.2", "avg_log2FC","p_val_adj")]
+  markers$cluster <- as.factor(markers$cluster)
+  markers$diff_pct = abs(markers$pct.1-markers$pct.2)
+  markers <- markers[order(markers$diff_pct, decreasing = TRUE),]
+  merged_data[[i]] = scData
+}
+
+reasons = NULL
+for (i in unique(sample_data$Name)){
+  df = read.csv(file.path(sample_data[sample_data$Name == i,]$isoSeqFiltReasons), skip = 4)
+  reasons[[i]] = df
+}
+
+pbAnnot = NULL
+for (i in unique(sample_data$Name)){
+  df = read.csv(file.path(sample_data[sample_data$Name == i,]$PigeonUnfiltered, "scisoseq.annotated.info.csv"), sep = "\t")
+  pbAnnot[[i]] = df
+}
+
+reasons_pbAnnot = NULL
+for (i in unique(sample_data$Name)){
+  print(length(unique(reasons[[i]]$filtered_isoform)))
+  print(length(intersect(unique(reasons[[i]]$filtered_isoform), pbAnnot[[i]]$pbid)))
+  df = merge(pbAnnot[[i]], reasons[[i]], by.y= "filtered_isoform", by.x = "pbid", all.x = TRUE)
+  reasons_pbAnnot[[i]] = df
+}  
+  
+reasons_pbAnnot_df = bind_rows(reasons_pbAnnot, .id= "Sample") 
+reasons_pbAnnot_df[is.na(reasons_pbAnnot_df$filter),]$filter = "Unfiltered"
+reasons_pbAnnot_df$Sample = factor(reasons_pbAnnot_df$Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+
+```
+
+
+1. How many isoforms and reads are filtered
+
+```{r, fig.height=6, fig.width=10}
+reasons_pbAnnot_df %>% 
+  group_by(Sample, filter) %>% 
+  summarise(Read_count = n(), Isoform_count = n_distinct(pbid)) %>% 
+  melt(id.vars = c("filter", "Sample")) %>% 
+  ggplot(aes(filter, value)) + 
+  geom_boxplot() + 
+  geom_quasirandom(aes(color = Sample), size = 2) + 
+  facet_wrap(~variable, scales = "free_y") + 
+  scale_color_manual(values = myColors) + 
+  theme(axis.text.x = element_text(angle = 45, hjust= 1, vjust = 1, size = 15)) + 
+  labs(x = "", y = "count ")
+```
+
+```{r, fig.height=6, fig.width=10}
+merge(
+    reasons_pbAnnot_df %>% 
+        group_by(Sample, filter) %>% 
+        summarise(Read_count = n()) %>% 
+        pivot_wider(names_from = filter, values_from = Read_count) %>% 
+        mutate((across(where(is.numeric)) * 100)/ rowSums(across(where(is.numeric)))) %>% 
+        pivot_longer(!Sample) %>% 
+        mutate(Reads = value) %>% 
+        dplyr::select(Sample, name, Reads), 
+    reasons_pbAnnot_df %>% 
+        group_by(Sample, filter) %>% 
+        summarise(Isoform_count = n_distinct(pbid)) %>% 
+        pivot_wider(names_from = filter, values_from = Isoform_count) %>% 
+        mutate((across(where(is.numeric)) * 100)/ rowSums(across(where(is.numeric)))) %>% 
+        pivot_longer(!Sample) %>% mutate(Isoforms = value) %>% 
+        dplyr::select(Sample, name, Isoforms), by = c("Sample", "name")) %>% 
+    melt(id.vars = c("name", "Sample")) %>% mutate(name = if_else(name == "LowCoverage/Non-Canonical", "LCNC", name)) %>% ggplot(aes(name, value)) + 
+    geom_boxplot() + 
+    geom_quasirandom(aes(color = Sample), size = 2) + 
+    facet_wrap(~variable, scales = "free_y") + 
+    scale_color_manual(values = myColors) + 
+    theme(axis.text.x = element_text(angle = 45, hjust= 1, vjust = 1, size = 12), axis.text.y = element_text(size = 12), strip.text = element_text(size = 13), legend.text = element_text(size = 12)) + 
+    labs(x = "", y = "percentage")
+```
+
+
+2. The so called artefacts what do they classify as
+
+```{r, fig.height=6, fig.width=10}
+df = reasons_pbAnnot_df %>% 
+  group_by(filter, category) %>% 
+  summarise(Isoforms = n_distinct(pbid), Reads = n()) %>% 
+  mutate(category = case_when(category == "full-splice_match" ~ "FSM", 
+                              category == "incomplete-splice_match" ~ "ISM", 
+                              category == "novel_in_catalog" ~ "NIC", 
+                              category == "novel_not_in_catalog" ~ "NNC", 
+                              .default = category),
+         filter = if_else(filter == "LowCoverage/Non-Canonical", "LCNC", filter)) 
+df = df[!df$category %in% c("moreJunctions", "fusion"),]
+ggplot(melt(df), aes(x="", y=value, fill=category)) + 
+    facet_grid(variable~filter) + geom_bar(stat="identity", position = "fill", width=1, color="white") +
+    coord_polar("y", start=0) + theme_classic() +
+    scale_fill_manual(values = brewPalette(n = 8)) + 
+    theme(axis.line = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          plot.title = element_text(hjust = 0.5, color = "#666666"), 
+          strip.text = element_text(size = 13), 
+          legend.text = element_text(size = 13), 
+          legend.position = "top", guides(fill=guide_legend(ncol=2))) + labs(x = "", y ="")
+```
+
+
+2. What do the alignments look like in Illumina 
+
+How many are counted, how many are unspliced
+
+```{r fig.height=4, fig.width=6}
+library(Rsamtools)
+library(GenomicAlignments)
+gtffile = "/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/sl_unzip_datasets/5c640510-4bee-4ae8-b642-48ed209b79bb/call-unzip_datasets/execution/gencode.v39.annotation.sorted.gtf"
+
+gtf <- rtracklayer::import(gtffile)
+gtfExon <- gtf[gtf$type == "exon" & gtf$gene_type == "protein_coding", ]
+trRangesList <- split(gtfExon, gtfExon$transcript_id)
+
+reasons_pbAnnot_df$BCrev_UMIrev = paste(reasons_pbAnnot_df$BCrev, reasons_pbAnnot_df$UMIrev)
+
+alignment_Q = NULL
+for(i in unique(sample_data$Name)){
+  smi = sample_data[sample_data$Name == i,]
+  tagIds_df = reasons_pbAnnot_df[reasons_pbAnnot_df$Sample == i,]
+  tagIds = tagIds_df[tagIds_df$filter != "Unfiltered" & grepl("^AA", tagIds_df$BCrev),]$BCrev_UMIrev
+  tagIds_un = tagIds_df[tagIds_df$filter == "Unfiltered" & grepl("^AA", tagIds_df$BCrev),]$BCrev_UMIrev
+  illBam = paste0("/srv/GT/analysis/zajacn/p28443/subset_bams_072024/", i, "-AA.bam")
+  system.time({
+      sbp <- ScanBamParam(what =  c("qname", "seq"), tag = c("GN", "xf", "CB", "UB", "NH", "RE"))
+      illGa <- readGAlignments(illBam, param = sbp)
+  })
+  mcols(illGa)$CB <- sub("-1", "", mcols(illGa)$CB)
+  mcols(illGa)$tagId <- paste(mcols(illGa)$CB, mcols(illGa)$UB)
+  illGa_sub = illGa[mcols(illGa)$tagId %in% tagIds]
+  illGa_noart = illGa[mcols(illGa)$tagId %in% tagIds_un]
+  mcols(illGa_sub)$isTranscriptCompatible <- countCompatibleOverlaps(illGa_sub, trRangesList) >= 1
+  mcols(illGa_noart)$isTranscriptCompatible <- countCompatibleOverlaps(illGa_noart, trRangesList) >= 1
+  print(paste(i, table(mcols(illGa_noart)$isTranscriptCompatible)))
+  print(paste(i, table(mcols(illGa_sub)$isTranscriptCompatible)))
+  df = rbind(data.frame(table(mcols(illGa_noart)$xf), Sample = i, label = "Unfiltered", tagIds = length(tagIds_un)), data.frame(table(mcols(illGa_sub)$xf), Sample = i, label = "PacBio_artefacts", tagIds = length(tagIds)))
+  alignment_Q = rbind(alignment_Q, df)
+}
+alignment_Q$category = case_when(alignment_Q$Var1 == 0 ~ "unmapped or not confidently aligned", alignment_Q$Var1 == 17 |  alignment_Q$Var1 == 19 ~ "discarded", alignment_Q$Var1 == 25 ~ "counted")
+x = alignment_Q %>% group_by(Sample, label, tagIds, category) %>% summarise(Freq = sum(Freq))
+x = x %>% pivot_wider(names_from = category, values_from = Freq)
+x$sum = rowSums(x[,c(4:6)])
+x[,c(4:6)] = (x[,c(4:6)]*100)/x$sum
+melt(x[,-7], id.vars = c("Sample", "label", "tagIds")) %>% 
+    ggplot(aes(label, value, color = variable))  + 
+    geom_quasirandom(size = 2, dodge.width=.9) + 
+    geom_boxplot() + labs(x = "label", y = "percentage", color = "alignment type") + theme(legend.position = "top") + labs(x = "Matching Illumina Reads")
+```
+
+```{r fig.height=4, fig.width=6}
+# gtffile = "/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/sl_unzip_datasets/5c640510-4bee-4ae8-b642-48ed209b79bb/call-unzip_datasets/execution/gencode.v39.annotation.sorted.gtf"
+#  
+# gtf <- rtracklayer::import(gtffile)
+# gtfExon <- gtf[gtf$type == "exon" & gtf$gene_type == "protein_coding", ]
+# trRangesList <- split(gtfExon, gtfExon$transcript_id)
+# 
+# reasons_pbAnnot_df$BCrev_UMIrev = paste(reasons_pbAnnot_df$BCrev, reasons_pbAnnot_df$UMIrev)
+
+alignment_Q = NULL
+for(i in unique(sample_data$Name)){
+  smi = sample_data[sample_data$Name == i,]
+  tagIds_df = reasons_pbAnnot_df[reasons_pbAnnot_df$Sample == i,]
+  tagIds = tagIds_df[tagIds_df$filter != "Unfiltered" & grepl("^AA", tagIds_df$BCrev),]$BCrev_UMIrev
+  tagIds_un = tagIds_df[tagIds_df$filter == "Unfiltered" & grepl("^AA", tagIds_df$BCrev),]$BCrev_UMIrev
+  illBam = paste0("/srv/GT/analysis/zajacn/p28443/subset_bams_072024/", i, "-AA.bam")
+  system.time({
+      sbp <- ScanBamParam(what =  c("qname", "seq"), tag = c("GN", "xf", "CB", "UB", "NH", "RE"))
+      illGa <- readGAlignments(illBam, param = sbp)
+  })
+  mcols(illGa)$CB <- sub("-1", "", mcols(illGa)$CB)
+  mcols(illGa)$tagId <- paste(mcols(illGa)$CB, mcols(illGa)$UB)
+  illGa_sub = illGa[mcols(illGa)$tagId %in% tagIds]
+  illGa_noart = illGa[mcols(illGa)$tagId %in% tagIds_un]
+  mcols(illGa_sub)$isTranscriptCompatible <- countCompatibleOverlaps(illGa_sub, trRangesList) >= 1
+  mcols(illGa_noart)$isTranscriptCompatible <- countCompatibleOverlaps(illGa_noart, trRangesList) >= 1
+  print(paste(i, table(mcols(illGa_noart)$isTranscriptCompatible)))
+  print(paste(i, table(mcols(illGa_sub)$isTranscriptCompatible)))
+  df = rbind(data.frame(table(mcols(illGa_noart)$xf), Sample = i, label = "Unfiltered", tagIds = length(tagIds_un)), data.frame(table(mcols(illGa_sub)$xf), Sample = i, label = "PacBio_artefacts", tagIds = length(tagIds)))
+  alignment_Q = rbind(alignment_Q, df)
+}
+
+alignment_Q = alignment_Q %>% pivot_wider(names_from = Var1, values_from = Freq)
+alignment_Q$sum = rowSums(alignment_Q[,c(4:7)])
+alignment_Q[,c(4:7)] = (alignment_Q[,c(4:7)]*100)/alignment_Q$sum
+melt(alignment_Q[,-8], id.vars = c("Sample", "label", "tagIds")) %>% 
+    ggplot(aes(label, value, color = variable))  + 
+    geom_quasirandom(size = 2, dodge.width=.9) + 
+    geom_boxplot() + labs(x = "label", y = "percentage", color = "alignment type")
+```
+
+3. Low coverage and NonCanonical have the biggest impact  - correlation
+
+
+If you compare to nonfiltered data:
+
+```{r, fig.width=7, fig.height=18, echo=FALSE, message=FALSE, warning=FALSE}
+
+geneAnno$seurat_name <- gsub("_", "-", geneAnno$gene_name)
+
+pacbio_pseudobulk_c = NULL
+for (i in names(seurat_pbDataList_unfiltered)){
+  commonCells = intersect(colnames(seurat_IllDataList[[i]][["RNA"]]$counts),colnames(seurat_pbDataList_unfiltered[[i]][["RNA"]]$counts))
+  scData = seurat_pbDataList_unfiltered[[i]][["RNA"]]$counts[,commonCells]
+  pacbio_pseudobulk_c[[i]] = rowSums(scData)
+}
+
+illumina_pseudobulk_c = NULL
+for (i in names(seurat_IllDataList)){
+  commonCells = intersect(colnames(seurat_IllDataList[[i]][["RNA"]]$counts),colnames(seurat_pbDataList_unfiltered[[i]][["RNA"]]$counts))
+  scData = seurat_IllDataList[[i]][["RNA"]]$counts[,commonCells]
+  illumina_pseudobulk_c[[i]] = rowSums(scData)
+}
+
+op = par(mfrow=c(5,2), mar = c(3,4.5,2,2))
+final_toCounts = NULL
+n = 1
+for (i in names(illumina_pseudobulk_c)){
+  x = illumina_pseudobulk_c[[i]]
+  totCounts <- data.frame("Illumina" = x)
+  xm = data.frame("PacBio" = pacbio_pseudobulk_c[[i]])
+  totCounts = merge(xm, totCounts, by = "row.names", all = TRUE)
+  totCounts[is.na(totCounts)] <- 0
+  totCounts = totCounts %>% column_to_rownames("Row.names")
+  geneAnnoX = geneAnno[match(rownames(totCounts), geneAnno$seurat_name),]
+  gcTypes = data.frame("GC < 0.4"=as.numeric(geneAnnoX$gc) < 0.4,
+                         "GC > 0.6"=as.numeric(geneAnnoX$gc) > 0.6,
+                         check.names=FALSE)
+  widthTypes = data.frame("width < 800nt"=as.numeric(geneAnnoX$featWidth) < 800, 
+                        "width >4000nt"=as.numeric(geneAnnoX$featWidth) > 4000,
+                        check.names=FALSE)
+  sf <- ezLogmeanScalingFactor(totCounts, presentFlag = totCounts >0)
+  xNorm <- ezScaleColumns(totCounts, sf)
+  ezXYScatter(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10, xlab = "Illumina", ylab = "PacBio", types = gcTypes, main = i, cex = 1, cex.lab = 2, cex.main = 2)
+  x = cor.test(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10,  method = "pearson")
+  legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
+  ezXYScatter(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10, xlab = "Illumina", ylab = "PacBio", types = widthTypes, main = i, cex = 1, cex.lab =2, cex.main = 2)
+  legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
+  xNorm = xNorm %>% rownames_to_column()
+  colnames(xNorm) = c("Gene", "Illumina", "PacBio")
+  xNorm$label = if_else(xNorm$Illumina > (xNorm$PacBio + 1) * 1000, xNorm$Gene, "")
+  final_toCounts[[i]] = xNorm[!duplicated(xNorm$Gene),]
+  n = n + 1
+}
+par(op)
+```
+
+
+Filtered data:
+
+```{r, fig.width=7, fig.height=18, echo=FALSE, message=FALSE, warning=FALSE}
+
+geneAnno$seurat_name <- gsub("_", "-", geneAnno$gene_name)
+
+pacbio_pseudobulk_c = NULL
+for (i in names(seurat_pbDataList)){
+  commonCells = intersect(colnames(seurat_IllDataList[[i]][["RNA"]]$counts),colnames(seurat_pbDataList[[i]][["RNA"]]$counts))
+  scData = seurat_pbDataList[[i]][["RNA"]]$counts[,commonCells]
+  pacbio_pseudobulk_c[[i]] = rowSums(scData)
+}
+
+illumina_pseudobulk_c = NULL
+for (i in names(seurat_IllDataList)){
+  commonCells = intersect(colnames(seurat_IllDataList[[i]][["RNA"]]$counts),colnames(seurat_pbDataList[[i]][["RNA"]]$counts))
+  scData = seurat_IllDataList[[i]][["RNA"]]$counts[,commonCells]
+  illumina_pseudobulk_c[[i]] = rowSums(scData)
+}
+
+op = par(mfrow=c(5,2), mar = c(3,4.5,2,2))
+final_toCounts = NULL
+n = 1
+for (i in names(illumina_pseudobulk_c)){
+  x = illumina_pseudobulk_c[[i]]
+  totCounts <- data.frame("Illumina" = x)
+  xm = data.frame("PacBio" = pacbio_pseudobulk_c[[i]])
+  totCounts = merge(xm, totCounts, by = "row.names", all = TRUE)
+  totCounts[is.na(totCounts)] <- 0
+  totCounts = totCounts %>% column_to_rownames("Row.names")
+  geneAnnoX = geneAnno[match(rownames(totCounts), geneAnno$seurat_name),]
+  gcTypes = data.frame("GC < 0.4"=as.numeric(geneAnnoX$gc) < 0.4,
+                         "GC > 0.6"=as.numeric(geneAnnoX$gc) > 0.6,
+                         check.names=FALSE)
+  widthTypes = data.frame("width < 800nt"=as.numeric(geneAnnoX$featWidth) < 800, 
+                        "width >4000nt"=as.numeric(geneAnnoX$featWidth) > 4000,
+                        check.names=FALSE)
+  sf <- ezLogmeanScalingFactor(totCounts, presentFlag = totCounts >0)
+  xNorm <- ezScaleColumns(totCounts, sf)
+  ezXYScatter(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10, xlab = "Illumina", ylab = "PacBio", types = gcTypes, main = i, cex = 1, cex.lab = 2)
+  x = cor.test(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10,  method = "pearson")
+  legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
+  ezXYScatter(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10, xlab = "Illumina", ylab = "PacBio", types = widthTypes, main = i, cex = 1, cex.lab =2)
+  legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
+  xNorm = xNorm %>% rownames_to_column()
+  colnames(xNorm) = c("Gene", "Illumina", "PacBio")
+  xNorm$label = if_else(xNorm$Illumina > (xNorm$PacBio + 1) * 1000, xNorm$Gene, "")
+  final_toCounts[[i]] = totCounts
+  n = n + 1
+}
+par(op)
+```
+
+4. Which genes are affected? What do we expect from those genes?
+
+```{r, fig.width=15, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE}
+library(edgeR)
+for (i in names(final_toCounts)){
+  df = final_toCounts[[i]]
+  df = merge(df, 
+             geneAnno[!grepl("PAR", rownames(geneAnno)),c(2,10,11)] %>% 
+               group_by(gene_name) %>% 
+               summarise(gc = mean(gc), featWidth = mean(featWidth)), 
+             by.x = "row.names", 
+             by.y = "gene_name")
+  df = df %>% 
+    mutate(GCType = case_when(gc < 0.4 ~ "GC < 0.4", gc > 0.6 ~ "GC > 0.6", TRUE ~ "0.4<GC<0.6")) %>%
+    mutate(widthType = case_when(featWidth < 800 ~ "width < 800", featWidth > 4000 ~ "width >4000", TRUE ~ "800<width<4000"))
+  colnames(df) = c("Gene", "PacBio", "Illumina", "gc", "featWidth", "GCType", "widthType")
+  final_toCounts[[i]] = df
+}
+
+for (i in names(final_toCounts)){
+  x = final_toCounts[[i]][,c(1,2,3)]
+  x = x %>% rownames_to_column() %>% column_to_rownames("Gene") %>% dplyr::select("Illumina", "PacBio")
+  dge = DGEList(counts = x, group = c("Illumina", "PacBio"), genes = rownames(x), remove.zeros = TRUE)
+  res <- exactTest(dge, dispersion = 0.1)
+  res$table$FDR = p.adjust(res$table$PValue, method="fdr")
+  final_toCounts[[i]]$EdgeRLabel = ""
+  final_toCounts[[i]][final_toCounts[[i]]$Gene %in%  rownames(res$table[res$table$FDR < 0.05 & res$table$logFC > 1,]),]$EdgeRLabel = "PacBio > Illumina"
+  final_toCounts[[i]][final_toCounts[[i]]$Gene %in%  rownames(res$table[res$table$FDR < 0.05 & res$table$logFC < -1,]),]$EdgeRLabel = "Illumina > PacBio"
+  final_toCounts[[i]][final_toCounts[[i]]$EdgeRLabel == "",]$EdgeRLabel = "Illumina ~ PacBio"
+  x = final_toCounts[[i]]
+  p1 = rbind(x %>% group_by(widthType) %>% summarise(count = n()) %>% mutate(EdgeRLabel = "All"), x[x$Illumina > 0 & x$PacBio > 0,] %>% group_by(EdgeRLabel, widthType) %>% summarise(count = n())) %>% ggplot(aes(EdgeRLabel, count, fill = widthType)) + geom_col(position = "fill") + theme(text = element_text(size = 15), axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5), legend.position = 'top', legend.spacing.x = unit(0.7, 'cm')) + labs(x = "")
+  p1A = rbind(x %>% group_by(widthType) %>% summarise(count = n()) %>% mutate(EdgeRLabel = "All"), x[x$Illumina > 0 & x$PacBio > 0,] %>% group_by(EdgeRLabel, widthType) %>% summarise(count = n())) %>% ggplot(aes(EdgeRLabel, count, fill = widthType)) + geom_col(position = "stack") + theme(text = element_text(size = 15), axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5), legend.position = 'top', legend.spacing.x = unit(0.7, 'cm')) + labs(x = "")
+  print(plot_grid(p1, p1A, ncol = 2))
+}
+```
+
+
+```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+
+comb = bind_rows(final_toCounts, .id = "Sample")
+comb$Sample = factor(comb$Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+comb = comb[comb$Illumina > 0 & comb$PacBio > 0,]
+
+comb %>% group_by(Sample, EdgeRLabel, widthType) %>% summarise(proportion = n()) %>% ggplot(aes(EdgeRLabel, proportion, fill = widthType)) + geom_col(position = "fill", colour="black") + facet_grid(~Sample) + theme(text = element_text(size = 13), axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5, size = 13), legend.position = 'top', legend.spacing.x = unit(0.5, 'cm'), legend.text = element_text(size = 14)) + labs(x = "") + scale_fill_manual(values = c("#F8766D", "#619CFF", "#00BA38"))
+```
+
+```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+
+merge(comb %>% group_by(Sample, EdgeRLabel, widthType) %>% summarise(count = n()), 
+      comb %>% group_by(Sample, EdgeRLabel) %>% summarise(sum = n()) %>% mutate(widthType = "800<width<4000"), 
+      by = c("Sample", "EdgeRLabel", "widthType"), all = TRUE) %>% 
+  replace(is.na(.), "") %>% 
+  ggplot(aes(EdgeRLabel, count, fill = widthType)) + 
+  geom_col(position = "stack", colour="black") + 
+  facet_grid(~Sample) + 
+  theme(text = element_text(size = 12), axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5), legend.position = 'top', legend.spacing.x = unit(0.5, 'cm')) + labs(x = "") + 
+  scale_fill_manual(values = c("#F8766D", "#619CFF", "#00BA38")) + 
+  geom_text(aes(x =EdgeRLabel, y = 6000, label = sum))
+```
+
+```{r, fig.width=6, fig.height=5, echo=FALSE, message=FALSE, warning=FALSE}
+
+p1 = comb[,c(1,6,9)] %>% ggplot(aes(Sample, featWidth, fill = EdgeRLabel)) + geom_boxplot(outliers = FALSE) + scale_fill_manual(values = c("#A6761D", "#440154FF", "cyan")) + labs(y = "Gene Length", fill = "") + theme( legend.text = element_text(size = 11), legend.position = "top", legend.spacing.x = unit(3, 'cm'), text = element_text(size = 13))
+p1
+```
+
+```{r, fig.width=6, fig.height=5, echo=FALSE, message=FALSE, warning=FALSE}
+
+p1 = comb[,c(1,6,9)] %>% ggplot(aes(Sample, featWidth, fill = EdgeRLabel)) + geom_boxplot(outliers = FALSE) + scale_fill_manual(values = c("#A6761D", "#440154FF", "cyan")) + labs(y = "Gene Length", fill = "") + theme( legend.text = element_text(size = 11), legend.position = "top", legend.spacing.x = unit(3, 'cm'), text = element_text(size = 13))
+p1
+```
+
+
+```{r,fig.width=8, fig.height=5, echo=FALSE, message=FALSE, warning=FALSE}
+data_summary <- function(x) {
+    m <- mean(x)
+    ymin <- m-sd(x)
+    ymax <- m+sd(x)
+    return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+p1 = comb[,c(1,6,9)] %>% ggplot(aes(Sample, featWidth, fill = EdgeRLabel)) + geom_violin() + scale_fill_manual(values = c("#A6761D", "#440154FF", "cyan")) + labs(y = "Gene Length", fill = "") + theme( legend.text = element_text(size = 11), legend.position = "top", legend.spacing.x = unit(3, 'cm'), text = element_text(size = 13), axis.text.x = element_text(size = 13)) + ylim(0,6000) + stat_summary(fun.y=mean, position=position_dodge(width=0.9), colour = "red")
+p1
+```
+
+
+5. Length of the reads that map to those genes
+
+```{r, fig.width=6, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot() + 
+  geom_density(aes(reasons_pbAnnot_df[reasons_pbAnnot_df$gene %in% comb[comb$widthType == "width >4000" & comb$EdgeRLabel == "Illumina > PacBio",]$Gene & reasons_pbAnnot_df$filter != "Unfiltered",]$length), color = "red") + 
+  geom_density(aes(reasons_pbAnnot_df$length), color = "black") + 
+  labs(x = "Isoform length", y = "Denisty")
+
+```
+
+
+```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+for (i in unique(reasons_pbAnnot_df$Sample)){
+  p1 = ggplot() + 
+  geom_density(aes(reasons_pbAnnot_df[reasons_pbAnnot_df$gene %in% comb[comb$widthType == "width >4000" & comb$EdgeRLabel == "Illumina > PacBio" & comb$Sample == i,]$Gene & reasons_pbAnnot_df$filter != "Unfiltered" & reasons_pbAnnot_df$Sample == i,]$length), color = "red") + 
+  geom_density(aes(reasons_pbAnnot_df[reasons_pbAnnot_df$Sample == i,]$length), color = "black") + labs(x = "Isoform length", y = "Denisty")
+  print(p1)
+}
+
+```
+
+General length of filtered artefacts
+
+```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot() + 
+  geom_density(aes(reasons_pbAnnot_df[reasons_pbAnnot_df$filter != "Unfiltered",]$length), color = "red") + 
+  geom_density(aes(reasons_pbAnnot_df[reasons_pbAnnot_df$filter == "Unfiltered",]$length), color = "black") + 
+  facet_grid(~reasons_pbAnnot_df$Sample) +
+  labs(x = "Isoform length", y = "Denisty")
+
+```
+
+```{r, fig.width=15, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+#reasons_pbAnnot_df$filter2 = if_else(reasons_pbAnnot_df$filter == "Unfiltered", "Unfiltered", "Filtered")
+
+ggplot(reasons_pbAnnot_df, aes(length, fill = filter2)) + geom_density() + scale_fill_manual(values = c("red", "black")) + theme(strip.text = element_text(size = 15), legend.position = "top", legend.text = element_text(size = 17)) + xlim(0,3500) + labs(fill= "PacBio read category") + theme(text = element_text(size = 14)) + facet_grid(~Sample)
+```
+
+```{r, fig.width=15, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+#reasons_pbAnnot_df$filter2 = if_else(reasons_pbAnnot_df$filter == "Unfiltered", "Unfiltered", "Filtered")
+
+ggplot(reasons_pbAnnot_df[reasons_pbAnnot_df$filter %in% c("Unfiltered", "LowCoverage/Non-Canonical"),], aes(length, color = filter2)) + geom_density() + scale_color_manual(values = c("red", "black")) + theme(strip.text = element_text(size = 15), legend.position = "top", legend.text = element_text(size = 17)) + xlim(0,3500) + labs(color="PacBio isoform category", x = "Read Length",y = "Density") + theme(text = element_text(size = 14), axis.text.y = element_text(size = 17), axis.text.x = element_text(size = 17)) + facet_grid(~Sample)
+```
+
+Impose a KS test on it.
+
+```{r, fig.width=16, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+for (i in levels(reasons_pbAnnot_df$Sample)){
+  print(ks.test(reasons_pbAnnot_df[reasons_pbAnnot_df$Sample == i & reasons_pbAnnot_df$filter2 == "Unfiltered",]$length, reasons_pbAnnot_df[reasons_pbAnnot_df$Sample == i & reasons_pbAnnot_df$filter2 == "Filtered",]$length))
+}
+```
+
+6. Lets compare PacBio to PacBio unfiltered  - pseudobulk correlation
+
+Not scaled and normalized
+
+```{r, fig.width=7, fig.height=18, echo=FALSE, message=FALSE, warning=FALSE}
+
+pacbio_pseudobulk_unfiltered = NULL
+for (i in names(seurat_pbDataList_unfiltered)){
+    scData = seurat_pbDataList_unfiltered[[i]][["RNA"]]$counts
+    pacbio_pseudobulk_unfiltered[[i]] = rowSums(scData)
+}
+pacbio_pseudobulk = NULL
+for (i in names(seurat_pbDataList)){
+    scData = seurat_pbDataList[[i]][["RNA"]]$counts
+    pacbio_pseudobulk[[i]] = rowSums(scData)
+}
+op = par(mfrow=c(5,2), mar = c(3,4.5,2,2))
+final_toCounts = NULL
+n = 1
+for (i in names(pacbio_pseudobulk)){
+    x = pacbio_pseudobulk[[i]]
+    totCounts <- data.frame("PacBio" = x)
+    xm = data.frame("PacBio_unfiltered" = pacbio_pseudobulk_unfiltered[[i]])
+    totCounts = merge(xm, totCounts, by = "row.names", all = TRUE)
+    totCounts[is.na(totCounts)] <- 0
+    totCounts = totCounts %>% column_to_rownames("Row.names")
+    geneAnnoX = geneAnno[match(rownames(totCounts), geneAnno$gene_name),]
+    gcTypes = data.frame("GC < 0.4"=as.numeric(geneAnnoX$gc) < 0.4,
+                         "GC > 0.6"=as.numeric(geneAnnoX$gc) > 0.6,
+                         check.names=FALSE)
+    widthTypes = data.frame("width < 800nt"=as.numeric(geneAnnoX$featWidth) < 800, 
+                            "width >4000nt"=as.numeric(geneAnnoX$featWidth) > 4000,
+                            check.names=FALSE)
+    #sf <- ezLogmeanScalingFactor(totCounts, presentFlag = totCounts >0)
+    xNorm <- totCounts
+    ezXYScatter(xNorm[ , "PacBio"]+10, xNorm[ ,  "PacBio_unfiltered"]+ 10, xlab = "PacBio", ylab = "PacBio_unfiltered", types = gcTypes, main = i, cex = 1, cex.lab = 2, cex.main = 2)
+    x = cor.test(xNorm[ , "PacBio"]+10, xNorm[ ,  "PacBio_unfiltered"]+ 10,  method = "pearson")
+    legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.5)
+    ezXYScatter(xNorm[ , "PacBio"]+10, xNorm[ ,  "PacBio_unfiltered"]+ 10, xlab = "PacBio", ylab = "PacBio_unfiltered", types = widthTypes, main = i, cex = 1, cex.lab =2, cex.main = 2)
+    legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.5)
+    xNorm = xNorm %>% rownames_to_column()
+    colnames(xNorm) = c("Gene", "PacBio", "PacBio_unfiltered")
+    final_toCounts[[i]] = totCounts %>% rownames_to_column("Gene")
+    n = n + 1
+}
+par(op)
+```
+
+7. Which genes are affected? What do we expect from those genes?
+
+```{r, fig.width=15, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE}
+library(edgeR)
+for (i in names(final_toCounts)){
+  df = final_toCounts[[i]]
+  df = merge(df, 
+             geneAnno[!grepl("PAR", rownames(geneAnno)),c(2,10,11)] %>% 
+               group_by(gene_name) %>% 
+               summarise(gc = mean(gc), featWidth = mean(featWidth)), 
+             by.x = "Gene", 
+             by.y = "gene_name")
+  df = df %>% 
+    mutate(GCType = case_when(gc < 0.4 ~ "GC < 0.4", gc > 0.6 ~ "GC > 0.6", TRUE ~ "0.4<GC<0.6")) %>%
+    mutate(widthType = case_when(featWidth < 800 ~ "width < 800", featWidth > 4000 ~ "width >4000", TRUE ~ "800<width<4000"))
+  final_toCounts[[i]] = df
+}
+
+for (i in names(final_toCounts)){
+  x = final_toCounts[[i]][,c(1,2,3)]
+  x = x %>% rownames_to_column() %>% column_to_rownames("Gene") %>% dplyr::select("PacBio", "PacBio_unfiltered")
+  dge = DGEList(counts = x, group = c("PacBio", "PacBio_unfiltered"), genes = rownames(x), remove.zeros = TRUE)
+  res <- exactTest(dge, dispersion = 0.1)
+  res$table$FDR = p.adjust(res$table$PValue, method="fdr")
+  final_toCounts[[i]]$EdgeRLabel = ""
+  final_toCounts[[i]][final_toCounts[[i]]$Gene %in%  rownames(res$table[res$table$PValue < 0.05 & res$table$logFC > 1,]),]$EdgeRLabel = "PacBio_unfiltered > PacBio"
+  if (nrow(final_toCounts[[i]][final_toCounts[[i]]$Gene %in%  rownames(res$table[res$table$PValue < 0.05 & res$table$logFC < -1,]),] != 0)){
+    final_toCounts[[i]][final_toCounts[[i]]$Gene %in%  rownames(res$table[res$table$PValue < 0.05 & res$table$logFC < -1,]),]$EdgeRLabel = "PacBio > PacBio_unfiltered"
+  }
+  final_toCounts[[i]][final_toCounts[[i]]$EdgeRLabel == "",]$EdgeRLabel = "PacBio ~ PacBio_unfiltered"
+  x = final_toCounts[[i]]
+  p1 = rbind(x %>% group_by(widthType) %>% summarise(count = n()) %>% mutate(EdgeRLabel = "All"), x[x$PacBio > 0 & x$PacBio_unfiltered > 0,] %>% group_by(EdgeRLabel, widthType) %>% summarise(count = n())) %>% ggplot(aes(EdgeRLabel, count, fill = widthType)) + geom_col(position = "fill") + theme(text = element_text(size = 15), axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5), legend.position = 'top', legend.spacing.x = unit(0.7, 'cm')) + labs(x = "")
+  p1A = rbind(x %>% group_by(widthType) %>% summarise(count = n()) %>% mutate(EdgeRLabel = "All"), x[x$PacBio > 0 & x$PacBio_unfiltered > 0,] %>% group_by(EdgeRLabel, widthType) %>% summarise(count = n())) %>% ggplot(aes(EdgeRLabel, count, fill = widthType)) + geom_col(position = "stack") + theme(text = element_text(size = 15), axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5), legend.position = 'top', legend.spacing.x = unit(0.7, 'cm')) + labs(x = "")
+  print(plot_grid(p1, p1A, ncol = 2))
+}
+```
+
+
+```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+
+comb = bind_rows(final_toCounts, .id = "Sample")
+comb$Sample = factor(comb$Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+comb = comb[comb$PacBio > 0 & comb$PacBio_unfiltered > 0,]
+
+comb %>% group_by(Sample, EdgeRLabel, widthType) %>% summarise(proportion = n()) %>% ggplot(aes(EdgeRLabel, proportion, fill = widthType)) + geom_col(position = "fill", colour="black") + facet_grid(~Sample) + theme(text = element_text(size = 12), axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5), legend.position = 'top', legend.spacing.x = unit(0.5, 'cm')) + labs(x = "") + scale_fill_manual(values = c("#F8766D", "#619CFF", "#00BA38"))
+```
+
+```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+
+merge(comb %>% group_by(Sample, EdgeRLabel, widthType) %>% summarise(count = n()), 
+      comb %>% group_by(Sample, EdgeRLabel) %>% summarise(sum = n()) %>% mutate(widthType = "800<width<4000"), 
+      by = c("Sample", "EdgeRLabel", "widthType"), all = TRUE) %>% 
+  replace(is.na(.), "") %>% 
+  ggplot(aes(EdgeRLabel, count, fill = widthType)) + 
+  geom_col(position = "stack", colour="black") + 
+  facet_grid(~Sample) + 
+  theme(text = element_text(size = 12), axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5), legend.position = 'top', legend.spacing.x = unit(0.5, 'cm')) + labs(x = "") + 
+  scale_fill_manual(values = c("#F8766D", "#619CFF", "#00BA38")) + 
+  geom_text(aes(x =EdgeRLabel, y = 6000, label = sum))
+```
+
+```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+
+merge(comb %>% group_by(Sample, EdgeRLabel, widthType) %>% summarise(count = n()), 
+      comb %>% group_by(Sample, EdgeRLabel) %>% summarise(sum = n()) %>% mutate(widthType = "800<width<4000"), 
+      by = c("Sample", "EdgeRLabel", "widthType"), all = TRUE) %>% 
+  replace(is.na(.), "") %>% 
+  ggplot(aes(EdgeRLabel, count, fill = widthType)) + 
+  geom_col(position = "fill", colour="black") + 
+  facet_grid(~Sample) + 
+  theme(text = element_text(size = 12), axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5), legend.position = 'top', legend.spacing.x = unit(0.5, 'cm')) + labs(x = "") + 
+  scale_fill_manual(values = c("#F8766D", "#619CFF", "#00BA38"))
+```
+
+
+8. Impact on merged data
+
+UMAPs merged data SCpubr with clusters
+
+```{r, fig.height=13, fig.width=25, echo=FALSE, message=FALSE, warning=FALSE}
+groblist = NULL
+n = 1
+for (i in merged_data){
+  v = names(merged_data)[n]
+  p1 = SCpubr::do_DimPlot(sample = i, group.by = "Batch", colors.use = myColors) + theme(plot.background = element_rect(color = "black"))
+  p2 = SCpubr::do_BoxPlot(sample = i,feature = "nCount_RNA", split.by = "Batch", colors.use = myColors) + theme(plot.background = element_rect(color = "black"))
+  p3 = SCpubr::do_BarPlot(i, group.by = "Batch", split.by = "seurat_clusters", position = "stack", colors.use = myColors) + theme(plot.background = element_rect(color = "black"))
+  p4 = plot_grid(p1,p2,p3, ncol = 1)
+  groblist[[v]] = p4
+  n = n + 1
+}
+
+plot_grid(plotlist = groblist, ncol = 5, labels = c('Normal', 'ccRCC_2', "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+```
+
+### DEGs per cluster
+
+```{r, fig.height=10, fig.width=15, echo=FALSE, message=FALSE, warning=FALSE}
+
+for (i in merged_data){
+  Seurat::Idents(i) <- i$seurat_clusters
+  de_genes <- tibble::tibble(Seurat::FindAllMarkers(object = i))
+  p1 <- SCpubr::do_GroupwiseDEPlot(sample = i,
+                                de_genes = de_genes,
+                                min.cutoff = 1,
+                                group.by = "Batch",
+                                font.size = 20, axis.text.x.angle = 90)
+  print(p1)
+}
+
+```
+
+
+### Box plots SCpubr
+
+```{r, fig.height=4, fig.width=10, echo=FALSE, message=FALSE, warning=FALSE}
+groblist = NULL
+n = 1
+for (i in merged_data){
+  v = names(merged_data)[n]
+  print(SCpubr::do_BoxPlot(sample = i,feature = "nCount_RNA", split.by = "Batch"))
+}
+
+```
+
+
+## Euclidean distance
+
+```{r, fig.height=4, fig.width=10}
+euclideandist = NULL
+for (i in names(merged_data)){
+    dist <- merge(data.frame(Embeddings(object = merged_data[[i]][["umap"]])), merged_data[[i]]@meta.data[,c("Sample","Condition","Batch")], by = "row.names") %>% mutate(CellID = sapply(str_split(Row.names, "_"), .subset, 1))
+    df<-data.frame(distance = numeric())
+    for (x in unique(dist[dist$Batch == "PacBio",]$CellID)){
+        value = sqrt(sum((dist[(dist$CellID == x) & (dist$Batch == "PacBio"),c("umap_1", "umap_2")] - dist[(dist$CellID == x) & (dist$Batch == "Illumina"),c("umap_1", "umap_2")])^2))
+        df[x,] <- value
+    }
+    df = df %>% arrange(desc(distance)) %>% rownames_to_column()
+    df$Sample = i
+    euclideandist = rbind(euclideandist, df)
+}
+
+euclideandist$Sample = factor(euclideandist$Sample, levels = c(unique(euclideandist$Sample)))
+ggplot(euclideandist, aes(distance, colour = Sample)) + geom_freqpoly(binwidth = 0.1) + xlab("Euclidean distance") + theme(text = element_text(size = 20))
+```
+
+
+```{r, fig.height=4, fig.width=5}
+
+ggplot(euclideandist, aes(Sample, distance)) + geom_violin() + xlab("Sample") + ylab("Euclidean distance") + theme(text = element_text(size = 10)) + geom_quasirandom()
+```
+
+
+## DEGs per Batch ccRCC_3
+
+```{r, fig.height=6, fig.width=6, echo=FALSE, message=FALSE, warning=FALSE}
+i = merged_data$ccRCC_3
+i$seurat_clusters_Batch = paste(i$seurat_clusters, i$Batch, sep = "_")
+Idents(i) = "seurat_clusters_Batch"
+cluster3_sample3 <- FindMarkers(i, ident.1 = "5_Illumina", ident.2 = "4_PacBio", verbose = FALSE)
+i$featWidth = geneAnno[match(rownames(cluster3_sample3), geneAnno$gene_name),]$featWidth
+SCpubr::do_VolcanoPlot(i, de_genes = cluster3_sample3)
+```
+
+## sample 3 - markers
+
+```{r, fig.height=10, fig.width=25, echo=FALSE, message=FALSE, warning=FALSE}
+p1 = DimPlot(merged_data$ccRCC_3)
+makers3 <- FindAllMarkers(merged_data$ccRCC_3, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+makers3  %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) -> top10a 
+DoHeatmap(merged_data$ccRCC_3, features = top10a$gene) + NoLegend() 
+```
+
+# tbc
+```{r, fig.height=6, fig.width=15, echo=FALSE, message=FALSE, warning=FALSE}
+#x = reasons_pbAnnot_df[grepl("^AA", reasons_pbAnnot_df$BCrev),] %>% group_by(Sample, filter, gene, category) %>% summarise(count = n())
+#x[x$count > 1000 & x$filter == "LowCoverage/Non-Canonical",]$gene
+
+#RPL8
+#RPL13
+#RPL37A
+
+for (x in c("TMSB10", "MALAT1", "ANXA2")){
+  i = "Normal"
+  smi = sample_data[sample_data$Name == i,]
+  pbBam = "/srv/gstore/projects/p28443/o31598_SMRTLink_IsoSeq/p28443_o31598_1_threecells_combined/scisoseq.mapped.bam"
+  ill = paste0("/srv/GT/analysis/zajacn/p28443/p28443/", i, "-AA.bam")
+  bamFiles <- c(Illumina=ill, PacBio=pbBam)
+
+  myGenes <- x
+  locInfo = geneAnno[match(myGenes, geneAnno$gene_name) , c("seqid", "strand", "start", "end", "gene_name")]
+  locInfo$start <-pmax(locInfo$start -1000, 0)
+  locInfo$end <- locInfo$end +1000
+  locRanges = GRanges(locInfo)
+  stopifnot(!duplicated(locRanges$gene_name))
+
+  gtfFile <- "/srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/genes.gtf"
+  plotLocusCoverageProfile(rev(locRanges), bamFiles, gtfFile=gtfFile,
+                                     height=10, width=15)
+} 
+
+```
