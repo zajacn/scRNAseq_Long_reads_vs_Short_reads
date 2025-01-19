@@ -1,0 +1,143 @@
+---
+title:  "p28443 Revisions - Cells unique to PacBio"
+author: "Natalia Zajac"
+output:
+  html_document: 
+    highlight: pygments
+    theme: sand
+    code_folding: hide
+    toc: yes
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+---
+
+Started on `r format(Sys.time(), "%Y-%m-%d %H:%M:%S")`
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(Seurat)
+library(tidyverse)
+library(reshape2)
+
+sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
+mtcontent = read.csv("/srv/GT/analysis/zajacn/p28443/mito_content.csv")
+
+```
+
+## PacBio specific cells
+
+1. Are they also present in Illumina (raw data, unfiltered) and if so why were they filtered.
+
+```{r setup, include=FALSE}
+
+#Load raw ccRCC2 barcodes
+all_barcodes_ccRCC2 = read.delim(paste0("/srv/gstore/projects/", sample_data$CellRangerNoIntron, "/raw_feature_bc_matrix/barcodes.tsv.gz")[2], header = F)
+
+#Load UMIs
+UMIlist <- lapply(sample_data$umicounts, function(qsFile){
+  qsFile %>% qs::qread()
+})
+names(UMIlist) <- sample_data$Name
+UMIs = bind_rows(UMIlist, .id = "Sample")
+UMIs$Sample = factor(UMIs$Sample, levels = sample_data$Name)
+UMIs$UMI_count_Ill = UMIs$UMI_count_Ill/1000
+UMIs$UMI_count_Pb = UMIs$UMI_count_Pb/1000
+
+#Select PacBio specifc cells
+pacbio_sp_cells = sapply(str_split(rownames(UMIs[UMIs$Commonness == "Unique to PB",]), "\\.."), .subset,1)
+
+all_barcodes_ccRCC2[all_barcodes_ccRCC2$V1 %in% pacbio_sp_cells,] == pacbio_sp_cells
+
+#These cells are all filtered out
+```
+
+
+```{r setup, include=FALSE}
+
+library(Seurat)
+
+ccRCC2_h5 = Read10X_h5("/srv/gstore/projects/p28443/CellRanger_NoIntrons_SMRTLinkGTF/G18_626_ccRCC-cellRanger/raw_feature_bc_matrix.h5")
+ccRCC2_h5 = data.frame(ccRCC2_h5[,pacbio_sp_cells])
+
+```
+
+3. What is the number of UMIs
+
+```{r setup, include=FALSE}
+ggplot(UMIs[UMIs$Sample == "ccRCC_2" & UMIs$Commonness != "Unique to ILL",], aes(UMI_count_Pb, color = Commonness )) + geom_density(position = "stack")
+
+
+max(UMIs[UMIs$Sample == "ccRCC_2" & UMIs$Commonness == "Unique to PB",]$UMI_count_Pb) 
+# 36,750 max
+```
+
+2. What is the length of the reads
+
+```{r setup, include=FALSE}
+ccRCC2_cellinfo = read.delim("/srv/GT/analysis/zajacn/p28443/p28443_o31598_2/p28443_o31598_2_threecells_getMTinfo_unfiltered/scisoseq.info.csv")
+
+ccRCC2_cellinfo$category = ""
+ccRCC2_cellinfo[ccRCC2_cellinfo$BCrev %in% str_remove(pacbio_sp_cells, "-1"),]$category = "Unique to PB"
+ccRCC2_cellinfo[ccRCC2_cellinfo$category == "",]$category = "Common with ILL"
+
+ggplot(ccRCC2_cellinfo, aes(length, color = category)) + geom_density()
+
+##No difference in length of reads
+```
+
+3. How many transcripts in those cells
+
+```{r setup, include=FALSE}
+ccRCC2_cellinfo_2 = read.delim("/srv/GT/analysis/zajacn/p28443/p28443_o31598_2/p28443_o31598_2_threecells_getMTinfo_unfiltered/scisoseq.annotated.info.csv")
+
+ccRCC2_cellinfo_2$category = ""
+ccRCC2_cellinfo_2[ccRCC2_cellinfo_2$BCrev %in% str_remove(pacbio_sp_cells, "-1"),]$category = "Unique to PB"
+ccRCC2_cellinfo_2[ccRCC2_cellinfo_2$category == "",]$category = "Common with ILL"
+
+ggplot(ccRCC2_cellinfo_2, aes(length, color = category)) + geom_density()
+
+##No difference in length of isoforms
+
+summary_table = ccRCC2_cellinfo_2 %>% group_by(category, BCrev) %>% summarise(transcripts = n_distinct(transcript), Umis = n_distinct(UMI))
+
+paste("Mean number of reads:", mean(summary_table[summary_table$category == "Unique to PB",]$reads))
+paste("Mean number of transcripts", mean(summary_table[summary_table$category == "Unique to PB",]$transcripts))
+ggplot(melt(summary_table), aes(category, value)) + geom_violin() + labs(y = "Count", x = "") + facet_grid(variable~., scales = "free") 
+```
+
+
+4. What is the gene expression in those cells
+
+```{r setup, include=FALSE}
+pvalue_allMarkers <- 0.05
+assay= "RNA"
+vars.to.regress <- NULL
+
+cts <- Read10X(paste0(sample_data$PigeonUnfiltered[2], "/genes_seurat/"), gene.column = 1)
+featInfo <- ezRead.table(paste0(paste0(sample_data$PigeonUnfiltered[2], "/genes_seurat/"), "/genes.tsv"), header = FALSE, row.names = NULL)
+colnames(featInfo) <- c("gene_id", "gene_name")
+featInfo <- featInfo[featInfo$gene_name %in% geneAnno[geneAnno$type == "protein_coding",]$gene_name, ]
+geneInfo <- featInfo
+ctsGene <- averageRows(cts[featInfo$gene_id,], by = geneInfo$gene_name, func = sum) %>% as.matrix() %>% as("dgCMatrix")
+fixed <- sub("-1", "", colnames(ctsGene)) %>% DNAStringSet() %>% reverseComplement() %>% as.character()
+colnames(ctsGene) <- fixed
+seurat_object = CreateSeuratObject(ctsGene)
+seurat_object <- NormalizeData(seurat_object, normalization.method = "LogNormalize", scale.factor=10000, verbose=FALSE)
+seurat_object <- FindVariableFeatures(seurat_object, selection.method = "vst", nfeatures = 3000)
+seurat_object <- ScaleData(seurat_object, verbose = FALSE, do.scale=FALSE)
+seurat_object <- SCTransform(seurat_object, vst.flavor="v2", seed.use = 38, vars.to.regress = vars.to.regress, assay = assay, verbose = FALSE, return.only.var.genes=FALSE)
+seurat_object <- RunPCA(seurat_object, npcs =30, verbose = FALSE)
+seurat_object <- RunUMAP(seurat_object, reduction = "pca", dims = 1:30)
+seurat_object <- RunTSNE(seurat_object, reduction = "pca", dims = 1:30)
+seurat_object <- FindNeighbors(seurat_object, reduction = "pca", dims = 1:30)
+seurat_object <- FindClusters(seurat_object, resolution = seq(from = 0.2, to = 1, by = 0.2), verbose=FALSE)
+seurat_object <- RenameCells(seurat_object, new.names = str_remove(colnames(seurat_object), "-1"))
+seurat_object@meta.data$category = if_else(rownames(seurat_object@meta.data) %in% str_remove(pacbio_sp_cells, "-1"), "Unique to PB", "Common with ILL")
+
+Seurat::FeaturePlot(seurat_object, features = c("CA9", "EPCAM"))
+
+SCpubr::do_FeaturePlot(seurat_object, features = c("nCount_RNA", "nFeature_RNA"), 
+                       plot.title = "A collection of features", 
+                       ncol = 2)
+```

@@ -7,7 +7,7 @@ library(dplyr)
 library(Rsamtools)
 library(GenomicAlignments)
 
-sample_file = read_tsv("~/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
+sample_file = read_tsv("../2024-05-22-sampleInfo.tsv")
 sample_file = sample_file[5,]
 workDir <- "/srv/GT/analysis/zajacn/p28443/"
 

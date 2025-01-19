@@ -1,5 +1,7 @@
 cd /srv/GT/analysis/zajacn/p28443/p28443_o31598_1/
 
+#Run pigeon on all cells separately for batch effect analysis
+
 #4_D01
 /srv/GT/software/SMRTtools/SMRT_Link_v10/smrtcmds/bin/pigeon make-seurat --keep-ribo-mito-genes \
 --log-level INFO \

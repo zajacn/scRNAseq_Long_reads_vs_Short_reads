@@ -37,7 +37,7 @@ library(cowplot)
 library(gridExtra)
 library(ggbeeswarm)
 source("functions.R")
-sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
+sample_data = ezRead.table("../2024-05-22-sampleInfo.tsv")
 ##Load all pacbio dirs
 pbDirs <- file.path(sample_data$PigeonFiltered, "genes_seurat/")
 
@@ -229,6 +229,8 @@ reasons_pbAnnot_df %>%
 ```
 
 ```{r, fig.height=6, fig.width=10}
+
+pdf("Figures_2025_RevisionsNAR/PB_Artefacts_Reads_Isoforms.pdf", height=6, width=10)
 merge(
     reasons_pbAnnot_df %>% 
         group_by(Sample, filter) %>% 
@@ -250,8 +252,9 @@ merge(
     geom_quasirandom(aes(color = Sample), size = 2) + 
     facet_wrap(~variable, scales = "free_y") + 
     scale_color_manual(values = myColors) + 
-    theme(axis.text.x = element_text(angle = 45, hjust= 1, vjust = 1, size = 12), axis.text.y = element_text(size = 12), strip.text = element_text(size = 13), legend.text = element_text(size = 12)) + 
+    theme(axis.text.x = element_text(angle = 45, hjust= 1, vjust = 1, size = 15), axis.text.y = element_text(size = 15), strip.text = element_text(size = 15), legend.text = element_text(size = 12)) + 
     labs(x = "", y = "percentage")
+dev.off()
 ```
 
 
@@ -268,6 +271,7 @@ df = reasons_pbAnnot_df %>%
                               .default = category),
          filter = if_else(filter == "LowCoverage/Non-Canonical", "LCNC", filter)) 
 df = df[!df$category %in% c("moreJunctions", "fusion"),]
+pdf("Figures_2025_RevisionsNAR/Classification_Reads_Isoforms.pdf", height=6, width=10)
 ggplot(melt(df), aes(x="", y=value, fill=category)) + 
     facet_grid(variable~filter) + geom_bar(stat="identity", position = "fill", width=1, color="white") +
     coord_polar("y", start=0) + theme_classic() +
@@ -276,9 +280,10 @@ ggplot(melt(df), aes(x="", y=value, fill=category)) +
           axis.text = element_blank(),
           axis.ticks = element_blank(),
           plot.title = element_text(hjust = 0.5, color = "#666666"), 
-          strip.text = element_text(size = 13), 
-          legend.text = element_text(size = 13), 
+          strip.text = element_text(size = 16), 
+          legend.text = element_text(size = 15), 
           legend.position = "top", guides(fill=guide_legend(ncol=2))) + labs(x = "", y ="")
+dev.off()
 ```
 
 
@@ -324,10 +329,12 @@ x = alignment_Q %>% group_by(Sample, label, tagIds, category) %>% summarise(Freq
 x = x %>% pivot_wider(names_from = category, values_from = Freq)
 x$sum = rowSums(x[,c(4:6)])
 x[,c(4:6)] = (x[,c(4:6)]*100)/x$sum
+pdf("Figures_2025_RevisionsNAR/Illumina_equivalents_PacBio_artefacts.pdf", height=4, width=6)
 melt(x[,-7], id.vars = c("Sample", "label", "tagIds")) %>% 
     ggplot(aes(label, value, color = variable))  + 
     geom_quasirandom(size = 2, dodge.width=.9) + 
-    geom_boxplot() + labs(x = "label", y = "percentage", color = "alignment type") + theme(legend.position = "top") + labs(x = "Matching Illumina Reads")
+    geom_boxplot() + labs(x = "label", y = "percentage", color = "alignment type") + labs(x = "Matching Illumina Reads") + theme_bw() + theme(legend.position = "top")
+dev.off()
 ```
 
 ```{r fig.height=4, fig.width=6}
@@ -561,9 +568,10 @@ data_summary <- function(x) {
     ymax <- m+sd(x)
     return(c(y=m,ymin=ymin,ymax=ymax))
 }
-
-p1 = comb[,c(1,6,9)] %>% ggplot(aes(Sample, featWidth, fill = EdgeRLabel)) + geom_violin() + scale_fill_manual(values = c("#A6761D", "#440154FF", "cyan")) + labs(y = "Gene Length", fill = "") + theme( legend.text = element_text(size = 11), legend.position = "top", legend.spacing.x = unit(3, 'cm'), text = element_text(size = 13), axis.text.x = element_text(size = 13)) + ylim(0,6000) + stat_summary(fun.y=mean, position=position_dodge(width=0.9), colour = "red")
+pdf("Figures_2025_RevisionsNAR/Genelength_CommonCells_filtereddata.pdf", width=8, height=5)
+p1 = comb[,c(1,6,9)] %>% ggplot(aes(Sample, featWidth, fill = EdgeRLabel)) + geom_violin() + scale_fill_manual(values = c("#A6761D", "#440154FF", "cyan")) + labs(y = "Gene Length (bp)", fill = "") + theme( legend.text = element_text(size = 11), legend.position = "top", legend.spacing.x = unit(3, 'cm'), text = element_text(size = 15), axis.text.x = element_text(size = 15)) + ylim(0,6000) + stat_summary(fun.y=mean, position=position_dodge(width=0.9), colour = "red")
 p1
+dev.off()
 ```
 
 
@@ -591,6 +599,7 @@ for (i in unique(reasons_pbAnnot_df$Sample)){
 General length of filtered artefacts
 
 ```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+
 ggplot() + 
   geom_density(aes(reasons_pbAnnot_df[reasons_pbAnnot_df$filter != "Unfiltered",]$length), color = "red") + 
   geom_density(aes(reasons_pbAnnot_df[reasons_pbAnnot_df$filter == "Unfiltered",]$length), color = "black") + 
@@ -608,7 +617,9 @@ ggplot(reasons_pbAnnot_df, aes(length, fill = filter2)) + geom_density() + scale
 ```{r, fig.width=15, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
 #reasons_pbAnnot_df$filter2 = if_else(reasons_pbAnnot_df$filter == "Unfiltered", "Unfiltered", "Filtered")
 
-ggplot(reasons_pbAnnot_df[reasons_pbAnnot_df$filter %in% c("Unfiltered", "LowCoverage/Non-Canonical"),], aes(length, color = filter2)) + geom_density() + scale_color_manual(values = c("red", "black")) + theme(strip.text = element_text(size = 15), legend.position = "top", legend.text = element_text(size = 17)) + xlim(0,3500) + labs(color="PacBio isoform category", x = "Read Length",y = "Density") + theme(text = element_text(size = 14), axis.text.y = element_text(size = 17), axis.text.x = element_text(size = 17)) + facet_grid(~Sample)
+pdf("Figures_2025_RevisionsNAR/Length_pacBio_artefacts.pdf",width=7, height=5)
+ggplot(reasons_pbAnnot_df[reasons_pbAnnot_df$filter %in% c("Unfiltered", "LowCoverage/Non-Canonical"),], aes(length, color = filter2)) + geom_density() + scale_color_manual(values = c("red", "black")) + theme(strip.text = element_text(size = 15), legend.position = "top", legend.text = element_text(size = 17)) + xlim(0,3500) + labs(color="PacBio isoform category", x = "Read Length (bp)",y = "Density") + theme(text = element_text(size = 14), axis.text.y = element_text(size = 17), axis.text.x = element_text(size = 17)) 
+dev.off()
 ```
 
 Impose a KS test on it.
@@ -635,6 +646,7 @@ for (i in names(seurat_pbDataList)){
     scData = seurat_pbDataList[[i]][["RNA"]]$counts
     pacbio_pseudobulk[[i]] = rowSums(scData)
 }
+pdf("Figures_2025_RevisionsNAR/Pseudobulk_gene_expression_allcells_pacbio_vs_pacbiofilt.pdf", width=7, height=18)
 op = par(mfrow=c(5,2), mar = c(3,4.5,2,2))
 final_toCounts = NULL
 n = 1
@@ -654,17 +666,18 @@ for (i in names(pacbio_pseudobulk)){
                             check.names=FALSE)
     #sf <- ezLogmeanScalingFactor(totCounts, presentFlag = totCounts >0)
     xNorm <- totCounts
-    ezXYScatter(xNorm[ , "PacBio"]+10, xNorm[ ,  "PacBio_unfiltered"]+ 10, xlab = "PacBio", ylab = "PacBio_unfiltered", types = gcTypes, main = i, cex = 1, cex.lab = 2, cex.main = 2)
+    ezXYScatter(xNorm[ , "PacBio"]+10, xNorm[ ,  "PacBio_unfiltered"]+ 10, xlab = "PacBio_filtered (raw counts)", ylab = "PacBio_unfiltered (raw counts)", types = gcTypes, main = i, cex = 1, cex.lab = 1.5, cex.main = 2)
     x = cor.test(xNorm[ , "PacBio"]+10, xNorm[ ,  "PacBio_unfiltered"]+ 10,  method = "pearson")
-    legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.5)
-    ezXYScatter(xNorm[ , "PacBio"]+10, xNorm[ ,  "PacBio_unfiltered"]+ 10, xlab = "PacBio", ylab = "PacBio_unfiltered", types = widthTypes, main = i, cex = 1, cex.lab =2, cex.main = 2)
-    legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.5)
+    legend(x='topleft', legend=paste('R=', round(x$estimate,4)), cex = 1.5)
+    ezXYScatter(xNorm[ , "PacBio"]+10, xNorm[ ,  "PacBio_unfiltered"]+ 10, xlab = "PacBio_filtered (raw counts)", ylab = "PacBio_unfiltered (raw counts)", types = widthTypes, main = i, cex = 1, cex.lab =1.5, cex.main = 2)
+    legend(x='topleft', legend=paste('R=', round(x$estimate,4)), cex = 1.5)
     xNorm = xNorm %>% rownames_to_column()
     colnames(xNorm) = c("Gene", "PacBio", "PacBio_unfiltered")
     final_toCounts[[i]] = totCounts %>% rownames_to_column("Gene")
     n = n + 1
 }
 par(op)
+dev.off()
 ```
 
 7. Which genes are affected? What do we expect from those genes?
@@ -746,35 +759,40 @@ merge(comb %>% group_by(Sample, EdgeRLabel, widthType) %>% summarise(count = n()
 
 UMAPs merged data SCpubr with clusters
 
-```{r, fig.height=13, fig.width=25, echo=FALSE, message=FALSE, warning=FALSE}
+```{r, fig.height=7, fig.width=15, echo=FALSE, message=FALSE, warning=FALSE}
 groblist = NULL
 n = 1
 for (i in merged_data){
   v = names(merged_data)[n]
   p1 = SCpubr::do_DimPlot(sample = i, group.by = "Batch", colors.use = myColors) + theme(plot.background = element_rect(color = "black"))
-  p2 = SCpubr::do_BoxPlot(sample = i,feature = "nCount_RNA", split.by = "Batch", colors.use = myColors) + theme(plot.background = element_rect(color = "black"))
+  #p2 = SCpubr::do_BoxPlot(sample = i,feature = "nCount_RNA", split.by = "Batch", colors.use = myColors) + theme(plot.background = element_rect(color = "black"))
   p3 = SCpubr::do_BarPlot(i, group.by = "Batch", split.by = "seurat_clusters", position = "stack", colors.use = myColors) + theme(plot.background = element_rect(color = "black"))
-  p4 = plot_grid(p1,p2,p3, ncol = 1)
+  p4 = plot_grid(p1,p3, ncol = 1)
   groblist[[v]] = p4
   n = n + 1
 }
 
+pdf("Figures_2025_RevisionsNAR/UMAP_Plots_CommonCells_PacBio_filtered.pdf", height=7, width=15)
 plot_grid(plotlist = groblist, ncol = 5, labels = c('Normal', 'ccRCC_2', "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+dev.off()
 ```
 
 ### DEGs per cluster
 
 ```{r, fig.height=10, fig.width=15, echo=FALSE, message=FALSE, warning=FALSE}
 
-for (i in merged_data){
-  Seurat::Idents(i) <- i$seurat_clusters
-  de_genes <- tibble::tibble(Seurat::FindAllMarkers(object = i))
-  p1 <- SCpubr::do_GroupwiseDEPlot(sample = i,
+for (i in names(merged_data)){
+  filename = paste0(i,"GroupwiseDEPlot.pdf")
+  Seurat::Idents(merged_data[[i]]) <- merged_data[[i]]$seurat_clusters
+  de_genes <- tibble::tibble(Seurat::FindAllMarkers(object = merged_data[[i]]))
+  p1 <- SCpubr::do_GroupwiseDEPlot(sample = merged_data[[i]],
                                 de_genes = de_genes,
                                 min.cutoff = 1,
                                 group.by = "Batch",
                                 font.size = 20, axis.text.x.angle = 90)
+  pdf(paste0("Figures_2025_RevisionsNAR/", filename), height=10, width=15)
   print(p1)
+  dev.off()
 }
 
 ```
@@ -814,7 +832,7 @@ ggplot(euclideandist, aes(distance, colour = Sample)) + geom_freqpoly(binwidth =
 ```
 
 
-```{r, fig.height=4, fig.width=5}
+```{r, fig.height=4, fig.width=6}
 
 ggplot(euclideandist, aes(Sample, distance)) + geom_violin() + xlab("Sample") + ylab("Euclidean distance") + theme(text = element_text(size = 10)) + geom_quasirandom()
 ```
@@ -826,7 +844,7 @@ ggplot(euclideandist, aes(Sample, distance)) + geom_violin() + xlab("Sample") + 
 i = merged_data$ccRCC_3
 i$seurat_clusters_Batch = paste(i$seurat_clusters, i$Batch, sep = "_")
 Idents(i) = "seurat_clusters_Batch"
-cluster3_sample3 <- FindMarkers(i, ident.1 = "5_Illumina", ident.2 = "4_PacBio", verbose = FALSE)
+cluster3_sample3 <- FindMarkers(i, ident.1 = "4_Illumina", ident.2 = "5_PacBio", verbose = FALSE)
 i$featWidth = geneAnno[match(rownames(cluster3_sample3), geneAnno$gene_name),]$featWidth
 SCpubr::do_VolcanoPlot(i, de_genes = cluster3_sample3)
 ```
@@ -840,7 +858,8 @@ makers3  %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) -> top10a
 DoHeatmap(merged_data$ccRCC_3, features = top10a$gene) + NoLegend() 
 ```
 
-# tbc
+# Locus coverage
+
 ```{r, fig.height=6, fig.width=15, echo=FALSE, message=FALSE, warning=FALSE}
 #x = reasons_pbAnnot_df[grepl("^AA", reasons_pbAnnot_df$BCrev),] %>% group_by(Sample, filter, gene, category) %>% summarise(count = n())
 #x[x$count > 1000 & x$filter == "LowCoverage/Non-Canonical",]$gene

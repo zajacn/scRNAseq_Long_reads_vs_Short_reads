@@ -1,0 +1,432 @@
+---
+title:  "p28443 common cells"
+author: "Natalia Zajac"
+output:
+  html_document: 
+    highlight: pygments
+    theme: sand
+    code_folding: hide
+    toc: yes
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+---
+
+Started on `r format(Sys.time(), "%Y-%m-%d %H:%M:%S")`
+
+```{r setup, include=FALSE}
+library(SummarizedExperiment)
+library(plotly)
+library(scater)
+library(ezRun)
+library(DT)
+library(htmltools)
+library(Matrix)
+library(Seurat)
+library(pheatmap)
+library(DropletUtils)
+library(cowplot)
+library(tidyverse)
+library(ggvenn)
+library(patchwork)
+library(UpSetR)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(BiocGenerics)
+library(cowplot)
+library(gridExtra)
+library(ggpubr)
+
+source("functions.R")
+sample_data = ezRead.table("../2024-05-22-sampleInfo.tsv")
+
+geneAnno <- ezRead.table("/srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/SMRTLink11.1_annotation/genes_annotation_byGene.txt")
+#Read in mtcontent from Hubert
+mtcontent = read.csv("/srv/GT/analysis/zajacn/p28443/mito_content.csv")
+
+
+illDirs <- file.path("/srv/gstore/projects", sample_data$CellRangerNoIntron, "filtered_feature_bc_matrix/")
+
+seurat_IllDataList <- lapply(illDirs, function(crDir){
+  cts_Illumina <- Read10X(crDir, gene.column = 1)
+  featInfo <- ezRead.table(paste0(crDir, "/features.tsv.gz"), header = FALSE, row.names = NULL) # , col_names = FALSE)
+  colnames(featInfo) <- c("gene_id", "gene_name", "type")
+  featInfo <- featInfo[featInfo$gene_name %in% geneAnno[geneAnno$type == "protein_coding",]$gene_name, ]
+  featInfo <- featInfo[!grepl("(?i)^MT-", featInfo$gene_name),]
+  featInfo$isRiboprot <- grepl("(?i)^RPS|^RPL", featInfo$gene_name)
+  geneInfoCr <- featInfo
+  ctsGeneCr <- averageRows(cts_Illumina[featInfo$gene_id,], by = geneInfoCr$gene_name, func = sum) %>% as.matrix() %>% 
+    as("dgCMatrix")
+  seurat_object_Illumina =  CreateSeuratObject(ctsGeneCr)
+  seurat_object_Illumina <- PercentageFeatureSet(seurat_object_Illumina, "(?i)^RPS|^RPL", col.name = "percent_ribo")
+  colnames(seurat_object_Illumina) = sapply(str_split(colnames(seurat_object_Illumina), "-"), .subset, 1)
+  samplename = sample_data[sample_data$CellRangerNoIntron == str_remove(str_remove(crDir, "/srv/gstore/projects/"), "/filtered_feature_bc_matrix/"),]$Name
+  mt = mtcontent[mtcontent$Barcode %in% colnames(seurat_object_Illumina) & mtcontent$Sample == samplename,]
+  seurat_object_Illumina$percent_mito = setNames(mt[, c(5)], mt[, c(3)])
+  return(seurat_object_Illumina)
+})
+
+
+names(seurat_IllDataList) = sample_data$Name
+
+sample_data$PigeonUnfiltered_allCells = list.dirs("/srv/gstore/projects/p28443/o31598_SMRTLink_IsoSeq/p28443_o31598_allsamples_allcells_pigeon/")[grepl("genes_seurat",list.dirs("/srv/gstore/projects/p28443/o31598_SMRTLink_IsoSeq/p28443_o31598_allsamples_allcells_pigeon/"))]
+
+
+seurat_pbDataList <- lapply(sample_data$PigeonUnfiltered_allCells, function(pbDir){
+  samplename = sample_data[sample_data$PigeonUnfiltered_allCells == pbDir,]$Name
+  cts <- Read10X(pbDir, gene.column = 1)
+  colnames(cts) = sub("-1", "", colnames(cts)) %>% DNAStringSet() %>% reverseComplement() %>% as.character()
+  cts = cts[,colnames(seurat_IllDataList[[samplename]])]
+  featInfo <- ezRead.table(paste0(pbDir, "/genes.tsv"), header = FALSE, row.names = NULL) # , col_names = FALSE)
+  colnames(featInfo) <- c("gene_id", "gene_name")
+  featInfo <- featInfo[featInfo$gene_name %in% geneAnno[geneAnno$type == "protein_coding",]$gene_name, ]
+  featInfo <- featInfo[!grepl("(?i)^MT-", featInfo$gene_name),]
+  featInfo$isRiboprot <- grepl("(?i)^RPS|^RPL", featInfo$gene_name)
+  geneInfo <- featInfo
+  ctsGene <- averageRows(cts[featInfo$gene_id,], by = geneInfo$gene_name, func = sum) %>% 
+    as.matrix() %>% as("dgCMatrix")
+  seurat_object = CreateSeuratObject(ctsGene)
+  seurat_object <- PercentageFeatureSet(seurat_object, "(?i)^RPS|^RPL", col.name = "percent_ribo")
+  mt = mtcontent[mtcontent$Barcode %in% colnames(seurat_object) & mtcontent$Sample == samplename,]
+  seurat_object$percent_mito = setNames(mt[, c(4)], mt[, c(3)])
+  return(seurat_object)
+})
+names(seurat_pbDataList) = sample_data$Name
+
+pbDirs <- file.path(sample_data$PigeonUnfiltered, "genes_seurat/")
+seurat_pbDataList_realcells <- lapply(pbDirs, function(pbDir){
+  samplename = sample_data[sample_data$PigeonUnfiltered == str_remove(pbDir, "/genes_seurat/"),]$Name
+  cts <- Read10X(pbDir, gene.column = 1)
+  colnames(cts) = sub("-1", "", colnames(cts)) %>% DNAStringSet() %>% reverseComplement() %>% as.character()
+  featInfo <- ezRead.table(paste0(pbDir, "/genes.tsv"), header = FALSE, row.names = NULL) # , col_names = FALSE)
+  colnames(featInfo) <- c("gene_id", "gene_name")
+  featInfo <- featInfo[featInfo$gene_name %in% geneAnno[geneAnno$type == "protein_coding",]$gene_name, ]
+  featInfo <- featInfo[!grepl("(?i)^MT-", featInfo$gene_name),]
+  featInfo$isRiboprot <- grepl("(?i)^RPS|^RPL", featInfo$gene_name)
+  geneInfo <- featInfo
+  ctsGene <- averageRows(cts[featInfo$gene_id,], by = geneInfo$gene_name, func = sum) %>% 
+    as.matrix() %>% as("dgCMatrix")
+  seurat_object = CreateSeuratObject(ctsGene)
+  seurat_object <- PercentageFeatureSet(seurat_object, "(?i)^RPS|^RPL", col.name = "percent_ribo")
+  mt = mtcontent[mtcontent$Barcode %in% colnames(seurat_object) & mtcontent$Sample == samplename,]
+  seurat_object$percent_mito = setNames(mt[, c(4)], mt[, c(3)])
+  return(seurat_object)
+})
+names(seurat_pbDataList_realcells) = sample_data$Name
+
+```
+
+# {.tabset}
+
+## nFeature_RNA per cell
+
+```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
+for (i in names(seurat_IllDataList)){
+  print(merge(merge(data.frame("Illumina" = seurat_IllDataList[[i]]$nFeature_RNA), data.frame("PacBio" = seurat_pbDataList[[i]]$nFeature_RNA), by = "row.names"), data.frame("pacbio_real" = seurat_pbDataList_realcells[[i]]$nFeature_RNA), by.x = "Row.names", by.y = "row.names", all = TRUE) %>% mutate(real_cells = if_else(is.na(pacbio_real) == TRUE, "not_real_cell", "real_cell")) %>% ggplot(aes(Illumina,PacBio, color = real_cells)) + geom_point() + ggtitle(i))
+}
+```
+
+## nCount_RNA per cell
+
+```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
+for (i in names(seurat_IllDataList)){
+  print(merge(merge(data.frame("Illumina" = seurat_IllDataList[[i]]$nCount_RNA), data.frame("PacBio" = seurat_pbDataList[[i]]$nCount_RNA), by = "row.names"), data.frame("pacbio_real" = seurat_pbDataList_realcells[[i]]$nCount_RNA), by.x = "Row.names", by.y = "row.names", all = TRUE) %>% mutate(real_cells = if_else(is.na(pacbio_real) == TRUE, "not_real_cell", "real_cell")) %>% ggplot(aes(Illumina,PacBio, color = real_cells)) + geom_point() + ggtitle(i))
+}
+```
+
+## nCount_RNA per cell Zoom in
+
+```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
+for (i in names(seurat_IllDataList)){
+  print(merge(merge(data.frame("Illumina" = seurat_IllDataList[[i]]$nCount_RNA), data.frame("PacBio" = seurat_pbDataList[[i]]$nCount_RNA), by = "row.names"), data.frame("pacbio_real" = seurat_pbDataList_realcells[[i]]$nCount_RNA), by.x = "Row.names", by.y = "row.names", all = TRUE) %>% mutate(real_cells = if_else(is.na(pacbio_real) == TRUE, "not_real_cell", "real_cell")) %>% ggplot(aes(Illumina,PacBio, color = real_cells)) + geom_point() + xlim(0,30000) + ylim(0,30000) + ggtitle(i) )
+}
+```
+
+
+## Empty droplet analysis {.tabset}
+
+### Illumina {.tabset}
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+
+library(DropletUtils)
+
+illDirs_raw = str_replace(illDirs, "filtered", "raw")
+
+illDirs_raw = lapply(illDirs_raw, function(x) {
+  features = read.delim(paste0(x,"/features.tsv.gz"), header = F)
+  mtx = read10xCounts(x)
+  rownames(mtx) = features$V2
+  features$isMito = grepl( "(?i)^MT-", features$V2)
+  features$isRiboprot = grepl(  "(?i)^RPS|^RPL", features$V2)
+  mtx = mtx[!features$isMito & !features$isRiboprot, ]
+  return(mtx)
+})
+
+names(illDirs_raw) = sample_data$Name
+
+pacbioDirs_raw = lapply(sample_data$PigeonUnfiltered_allCells, function(x) {
+  features = read.delim(paste0(x,"/genes.tsv"), header = F)
+  mtx = read10xCounts(x)
+  features$isMito = grepl( "(?i)^MT-", features$V2)
+  features$isRiboprot = grepl(  "(?i)^RPS|^RPL", features$V2)
+  mtx = mtx[!features$isMito & !features$isRiboprot, ]
+  return(mtx)
+})
+
+names(pacbioDirs_raw) = sample_data$Name
+
+```
+
+
+#### UMI count vs rank plot
+
+Illumina
+
+```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
+bcrank_all = NULL
+for (i in names(illDirs_raw)){
+  bcrank <- barcodeRanks(counts(illDirs_raw[[i]]))
+  bcrank$Sample = i
+
+# Only showing unique points for plotting speed.
+  uniq <- !duplicated(bcrank$rank)
+  bcrank$knee = metadata(bcrank)$knee
+  bcrank$inflection = metadata(bcrank)$inflection
+  bcrank_all = rbind(bcrank_all, bcrank[uniq,])
+  plot(bcrank$rank[uniq], bcrank$total[uniq], log="xy",
+      xlab="Rank", ylab="Total UMI count", cex.lab=1.2)
+  
+  abline(h=metadata(bcrank)$inflection, col="darkgreen", lty=2)
+  abline(h=metadata(bcrank)$knee, col="dodgerblue", lty=2)
+  
+  legend("bottomleft", legend=c("Inflection", "Knee"), 
+          col=c("darkgreen", "dodgerblue"), lty=2, cex=1.2)
+}
+```
+
+All Samples together
+
+```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
+
+ggplot(bcrank_all, aes(rank ,total, color = factor(Sample, levels = sample_data$Name))) + 
+  geom_point() + 
+  scale_color_manual(values = myColors) + 
+  scale_x_log10() + 
+  scale_y_log10() + 
+  geom_hline(yintercept = 52122, color = myColors[["Normal"]]) + 
+  geom_hline(yintercept = 19140, color = myColors[["ccRCC_2"]]) + 
+  geom_hline(yintercept = 34617, color = myColors[["ccRCC_3"]]) + 
+  geom_hline(yintercept = 28813, color = myColors[["ccRCC_4"]]) + 
+  geom_hline(yintercept = 201, color = myColors[["ccRCC_5"]]) + 
+  geom_hline(yintercept = 5077, color = myColors[["Normal"]], linetype = "dashed") + 
+  geom_hline(yintercept = 1021, color = myColors[["ccRCC_2"]], linetype = "dashed") + 
+  geom_hline(yintercept = 7352, color = myColors[["ccRCC_3"]], linetype = "dashed") + 
+  geom_hline(yintercept = 1217, color = myColors[["ccRCC_4"]], linetype = "dashed") + 
+  geom_hline(yintercept = 111, color = myColors[["ccRCC_5"]], linetype = "dashed")
+
+```
+
+PacBio
+
+```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
+for (i in names(pacbioDirs_raw)){
+  bcrank <- barcodeRanks(counts(pacbioDirs_raw[[i]]))
+
+# Only showing unique points for plotting speed.
+  uniq <- !duplicated(bcrank$rank)
+  plot(bcrank$rank[uniq], bcrank$total[uniq], log="xy",
+      xlab="Rank", ylab="Total UMI count", cex.lab=1.2)
+  
+  abline(h=metadata(bcrank)$inflection, col="darkgreen", lty=2)
+  abline(h=metadata(bcrank)$knee, col="dodgerblue", lty=2)
+  
+  legend("bottomleft", legend=c("Inflection", "Knee"), 
+          col=c("darkgreen", "dodgerblue"), lty=2, cex=1.2)
+}
+```
+
+
+Per sample highlighting real cells and combining PacBio and Illumina
+
+```{r, fig.width=6, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE}
+
+for (i in names(illDirs_raw)){
+  bcrank <- barcodeRanks(counts(illDirs_raw[[i]]))
+  bcrank$Sample = i
+  
+  inflection = metadata(bcrank)$inflection
+  knee = metadata(bcrank)$knee
+  
+  uniq <- !duplicated(bcrank$rank)
+  bcrank = bcrank[uniq,]
+  bcrank = data.frame(bcrank) %>% arrange(total)
+  
+  cells_in_both = length(seurat_pbDataList_realcells[[i]]$nCount_RNA)
+  cells_in_ill = length(seurat_pbDataList[[i]]$nCount_RNA)
+  total_cells = nrow(bcrank)
+  first_nb = total_cells - cells_in_both + 1
+  second_nb = nrow(bcrank) - cells_in_ill + 1
+  
+  bcrank$color = "Rest"
+  bcrank[first_nb:total_cells,]$color = "Common"
+  bcrank[second_nb:(first_nb-1),]$color = "Unique to ILL"
+  bcrank$color = factor(bcrank$color, levels = c("Common","Unique to ILL", "Rest"))
+  
+  bcrank2 <- barcodeRanks(counts(pacbioDirs_raw[[i]]))
+  bcrank2$Sample = i
+  
+  inflection = metadata(bcrank2)$inflection
+  knee = metadata(bcrank2)$knee
+  
+  uniq <- !duplicated(bcrank2$rank)
+  bcrank2 = bcrank2[uniq,]
+  bcrank2 = data.frame(bcrank2) %>% arrange(total)
+
+  total_cells = nrow(bcrank2)
+  first_nb = total_cells - cells_in_both + 1
+  second_nb = nrow(bcrank2) - cells_in_ill + 1
+  
+  bcrank2$color = "Rest"
+  bcrank2[first_nb:total_cells,]$color = "Common"
+  bcrank2$color = factor(bcrank2$color, levels = c("Common","Rest"))
+  
+  
+  filename = paste0(i, "UMI_KneePLOT.pdf")
+  pdf(file.path("Figures_2025_RevisionsNAR",filename), width = 7, height = 7)
+  print(
+    ggplot() + geom_point(data = bcrank, aes(rank, total), color = "#A6761D") + geom_point(data = bcrank2, aes(rank, total), color = "cyan") + scale_x_log10() + scale_y_log10() + theme_bw() + labs(x = "Barcodes", y = "UMI Count") + scale_color_manual(values = c("#440154FF", "#A6761D", "grey")) + theme(legend.position = "top", legend.title = element_blank(), axis.text.x = element_text(size = 15), axis.text.y = element_text(size = 15), axis.title.x = element_text(size = 15), axis.title.y = element_text(size = 15)) + geom_hline(yintercept = head(bcrank2[bcrank2$color == "Common",], n = 1)$total ,color = "cyan") + geom_hline(yintercept = head(bcrank[bcrank$color == "Common",], n = 1)$total ,color = "#A6761D") + geom_hline(yintercept = head(bcrank[bcrank$color == "Unique to ILL",], n = 1)$total ,color = "#A6761D", linetype = "dashed") + ggtitle(i)) 
+    # +
+    #annotate("text", x=100000, y=head(bcrank[bcrank$color == "Unique to ILL",], n = 1)$total + 200, label="Illumina specific Cells") +
+    #annotate("text", x=100000, y=head(bcrank[bcrank$color == "Common",], n = 1)$total + 10000, label="Common Cells") +
+    #annotate("text", x=100000, y=head(bcrank2[bcrank2$color == "Common",], n = 1)$total + 4000, label="Common Cells"))
+  dev.off()
+}
+
+```
+
+### PacBio {.tabset}
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+
+pacbioDirs_raw_filt = lapply(pacbioDirs_raw, function(x){
+  set.seed(100)
+  emptyStats <- emptyDrops(x, niters=1e5)
+  x <- x[,which(emptyStats$FDR <= 0.001)]
+})
+
+
+```
+
+
+####  Distribution of pvalues for empty droplets
+
+```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
+
+for (i in names(illDirs_raw)){
+  set.seed(100)
+  limit <- 100   
+  all.out <- emptyDrops(counts(pacbioDirs_raw[[i]]), lower=limit, test.ambient=TRUE)
+  hist(all.out$PValue[all.out$Total <= limit & all.out$Total > 0],
+       xlab="P-value", main="", col="grey80") 
+}
+
+```
+
+#### Number of filtered cells per sample
+
+```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
+
+data.frame(nonemtpy_cells = t(data.frame(lapply(pacbioDirs_raw_filt, function(x) length(x$Barcode))))) %>% rownames_to_column() %>% datatable()
+
+```
+
+
+## Empty Droplet analysis BLAZE
+
+```{r, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+blaze = NULL
+for (i in list.files("/srv/gstore/projects/p28443/o31598_SMRTLink_IsoSeq/o31598_BLAZE/", pattern = "emtpy_bc_list.csv")){
+  empty = read.csv(paste0("/srv/gstore/projects/p28443/o31598_SMRTLink_IsoSeq/o31598_BLAZE/", i), header = F)
+  blaze[[i]] = empty
+}
+
+names(blaze) = sample_data$Name
+```
+
+
+```{r, fig.width=6, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE}
+
+for (i in sample_data$Name){
+  filename = paste0(i, "BLAZE_VENN.pdf")
+  pdf(file.path("Figures_2025_RevisionsNAR",filename), width = 7, height = 7)
+  print(ggVennDiagram::ggVennDiagram(list("ILL (CellRanger)" = colnames(seurat_IllDataList[[i]]), "BLAZE EmptyDrops" = blaze[[i]]$V1, "PB (Iso-seq)" = colnames(seurat_pbDataList_realcells[[i]])), set_color = c("#A6761D","black","darkcyan"), set_size = 6, label_size = 11) + ggtitle(i) + scale_x_continuous(expand = expansion(mult = .2)) + scale_fill_distiller(palette = "RdBu") +
+          theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 20))) 
+  dev.off()
+}
+
+```
+
+
+Simulated Barcode rank plot
+
+```{r, fig.width=6, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(ggplot2)
+library(dplyr)
+
+# Parameters
+set.seed(42)
+n_real_cells <- 3000  # Number of high-confidence cells
+n_multiplets <- 3000  # Number of multiplets
+n_background <- 1000000  # Number of background barcodes
+
+# Generate UMI counts
+umi_real <- rlnorm(n_real_cells, meanlog = 9, sdlog = 0.3)  # High UMI counts
+umi_multiplets <- rlnorm(n_multiplets, meanlog = 7.5, sdlog = 0.4)  # Intermediate UMI counts
+umi_background <- rlnorm(n_background, meanlog = 5.5, sdlog = 0.5)  # Low UMI counts
+
+# Combine and rank
+umi_counts <- c(umi_real, umi_multiplets, umi_background)
+barcode_data <- data.frame(
+    Rank = seq_along(umi_counts),
+    UMI_Counts = sort(umi_counts, decreasing = TRUE)
+)
+
+# Add fake thresholds for annotations
+primary_knee <- which.max(diff(diff(log10(barcode_data$UMI_Counts[1:n_real_cells + n_multiplets]))))
+secondary_knee <- n_real_cells + n_multiplets + which.max(diff(diff(log10(barcode_data$UMI_Counts[n_real_cells + n_multiplets:length(umi_counts)]))))
+
+# Plot the barcode rank plot
+px = ggplot(barcode_data, aes(x = Rank, y = UMI_Counts)) +
+    geom_line(color = "blue", size = 1)  +
+    scale_x_log10() +
+    scale_y_log10() +
+    labs(
+        title = "Schematic Single-Cell Barcode Rank Plot",
+        x = "Barcode Rank",
+        y = "UMI Counts"
+    ) +
+    theme_bw() +
+    theme(
+        text = element_text(size = 14),
+        plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+        panel.grid.minor = element_blank()
+    )
+
+pdf("Figures_2025_RevisionsNAR/Simulated_barcode_rank_plot.pdf", width = 7, height = 6)
+px
+dev.off()
+```
+
+
+
+Percentage of unique Illumina cells identified as empty drops by BLAZE:
+
+Normal - 222/(222 + 168)
+ccRCC2 - 51/(51 + 137)
+ccRCC3 - 162/(162 + 116)
+ccRCC4 - 208/(208 + 365)
+ccRCC5 - 365/(365 + 402)
+

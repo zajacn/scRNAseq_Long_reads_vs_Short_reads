@@ -1,0 +1,741 @@
+---
+title:  "p28443 PacBio bam and QC"
+author: "Natalia Zajac"
+output:
+  html_document: 
+    highlight: pygments
+    theme: sand
+    code_folding: hide
+    toc: yes
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: inline
+---
+
+Started on `r format(Sys.time(), "%Y-%m-%d %H:%M:%S")`
+
+```{r setup, include=FALSE}
+library(SummarizedExperiment)
+library(plotly)
+library(scater)
+library(ezRun)
+library(DT)
+library(htmltools)
+library(Matrix)
+library(Seurat)
+library(pheatmap)
+library(DropletUtils)
+library(cowplot)
+library(tidyverse)
+library(ggvenn)
+library(patchwork)
+library(UpSetR)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(BiocGenerics)
+library(cowplot)
+library(gridExtra)
+library(ggpubr)
+library(ggforce)
+
+source("functions.R")
+sample_data = ezRead.table("../2024-05-22-sampleInfo.tsv")
+geneAnno <- ezRead.table("/srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/SMRTLink11.1_annotation/genes_annotation_byGene.txt")
+sample_data$pbqs = file.path("/srv/GT/analysis/zajacn/p28443/subset_bams_072024", list.files("subset_bams_072024/", pattern = "-pbGa.qsd"))[c(5,1,2,3,4)]
+sample_data$illqs = file.path("/srv/GT/analysis/zajacn/p28443/subset_bams_072024", list.files("subset_bams_072024/", pattern = "-illGa.qsd"))[c(5,1,2,3,4)]
+sample_data$illqsUn = file.path("/srv/GT/analysis/zajacn/p28443/subset_bams_072024", list.files("subset_bams_072024/", pattern = "-illUnmapped.qsd"))[c(5,1,2,3,4)]
+sample_data$umicounts = file.path("/srv/GT/analysis/zajacn/p28443/UMI_summary", list.files("UMI_summary/", pattern = "-cellUMIStats.qsd"))[c(5,1,2,3,4)]
+sample_data$tsocounts = file.path("/srv/GT/analysis/zajacn/p28443/UMI_summary", list.files("UMI_summary/", pattern = "tso_pa.qsd"))[c(5,1,2,3,4)]
+sample_data$mtcontent = file.path("/srv/GT/analysis/zajacn/p28443/UMI_summary", list.files("UMI_summary/", pattern = "-cellMITOStats.qsd"))[c(5,1,2,3,4)]
+
+# Load the subset bam files as granges objects
+pbGaList <- lapply(sample_data$pbqs, function(qsFile){
+  qsFile %>% qs::qread() %>% granges(use.mcols=TRUE)
+})
+names(pbGaList) <- sample_data$Name
+illGaList <- lapply(sample_data$illqs, function(qsFile){
+  qsFile %>% qs::qread() %>% granges(use.mcols=TRUE)
+})
+names(illGaList) <- sample_data$Name
+illUnmappedList <- lapply(sample_data$illqsUn, qs::qread)
+names(illUnmappedList) <- sample_data$Name
+
+nCommonCellsUsed <- lapply(sample_data$Name, function(sm){
+  intersect(mcols(pbGaList[[sm]])$CB, mcols(illGaList[[sm]])$CB) %>% unique() %>% length()
+})
+names(nCommonCellsUsed) <- sample_data$Name
+
+# Load MITO content
+mtcontent = lapply(sample_data$mtcontent, function(qsFile){
+  qsFile %>% qs::qread() 
+})
+names(mtcontent) <- sample_data$Name
+
+# Load UMI counts
+UMIlist <- lapply(sample_data$umicounts, function(qsFile){
+  qsFile %>% qs::qread()
+})
+names(UMIlist) <- sample_data$Name
+# Load TSO data
+tso = lapply(sample_data$tsocounts, function(qsFile){
+  qsFile %>% qs::qread()
+})
+names(tso) = sample_data$Name
+
+# Filter duplicate reads in Illumina
+illGaDF = lapply(illGaList, function(x){
+  df = x[x$xf == "25",]                                           # choose the mapped and counted
+  dfrest = x[!x$xf %in% c("25", "0"),]                            # exclude mapped and counted and unmapped, deduplicate keeping one at random and not those that are already present at df
+  dfrest = dfrest[!duplicated(dfrest$tagId),]
+  dfrest = dfrest[!dfrest$tagId %in% df$tagId]
+  dfnull = x[x$xf == "0",]                                        # choose unmapped
+  dfnull = dfnull[!dfnull$tagId %in% c(dfrest$tagId, df$tagId),]  # keep only those that are not present already
+  dfnull = dfnull[!duplicated(dfnull$tagId),]
+  final = makeGRangesFromDataFrame(rbind(data.frame(df), data.frame(dfrest), data.frame(dfnull)), keep.extra.columns = T)
+  return(final)
+})
+
+
+# Filter duplicate reads in PacBio
+pbGaDF = lapply(pbGaList, function(x){ 
+  metadata <- as.data.frame(mcols(x))
+  metadata$index <- seq_along(x)
+  result_indices <- metadata %>%
+  group_by(tagId) %>%
+  filter(qlength == max(qlength)) %>%                     # Keep rows with max qlength
+  mutate(priority = case_when(
+    quality == "Pass" ~ 1,                                # Assign priority to "Pass"
+    quality != "Unknown" ~ 2,                             # Next priority: Not "Unknown"
+    TRUE ~ 3                                              # Lowest priority: "Unknown"
+  )) %>%
+  arrange(priority) %>%                                   # Sort by priority
+  slice(1) %>%
+    pull(index)
+  result_gr <- x[result_indices]
+  return(result_gr)
+})
+
+```
+
+# {.tabset}
+
+## Method
+
+```{r, fig.width=6, fig.height=5, echo=FALSE, message=FALSE, warning=FALSE}
+
+mtb = read.delim("../Methods_Comparison_table.txt")
+mtb$Category = factor(mtb$Category, levels = c("Wet-lab", "Read Trimming", "Cell-barcode Correction", "Cell Calling", "Read Deduplication", "UMI Counting"))
+mtb$Diff = factor(mtb$Diff, levels = rev(mtb$Diff))
+pdf("Figures_2025_RevisionsNAR/Method_table.pdf", width = 8, height = 19)
+melt(mtb) %>% mutate(value = if_else(value == 0, "No", "Yes")) %>% ggplot(aes(variable, Diff)) + geom_text(aes(label = value), size = 7) + facet_grid( Category~., scales = "free", space="free", as.table = T) + scale_shape_manual(values = c(4,3)) + theme_bw() + theme(legend.position = "bottom", axis.title.x = element_blank(), axis.text.y = element_text(size = 15), axis.text.x = element_text(size = 20), axis.title.y = element_blank(), strip.text = element_text(size = 14), legend.text = element_text(size = 15))  + scale_x_discrete(position = "top") + labs(shape = "", size = "") + scale_y_discrete(labels = function(x) str_wrap(x, width = 31))
+dev.off()
+
+```
+
+## Statistics for all cells {.tabset}
+
+
+### Number of reads
+
+```{r, fig.width=6, fig.height=5, echo=FALSE, message=FALSE, warning=FALSE}
+x = melt(sample_data[,c(1,8,10),] %>% rename(Illumina = nIlluminaReads, PacBio = nPbSegmentReads)) 
+x$Name = factor(x$Name, levels = sample_data$Name)
+x$value = x$value / 1000000
+p1 = ggplot(x, aes(Name, value, fill = variable)) + 
+  geom_bar(position = "dodge", stat = "identity") + 
+  scale_fill_manual(values = myColors) + 
+  labs(x = "Sample", y = "Number of reads [mio]", fill = "") + theme(legend.position = "top", text = element_text(size = 15))
+p1
+```
+
+UMI summary
+
+```{r, fig.width=11, fig.height=7,echo=FALSE, message=FALSE, warning=FALSE}
+UMIs = bind_rows(UMIlist, .id = "Sample")
+UMIs$Sample = factor(UMIs$Sample, levels = sample_data$Name)
+UMIs$Commonness = factor(UMIs$Commonness, levels = c("Unique to ILL", "Unique to PB", "Common"))
+
+p1 = ggplot(UMIs, aes(UMI_count_Pb, UMI_count_Ill, group = Commonness)) + 
+    geom_point(aes(fill = Commonness, shape = Sample), color = "black", size = 3, stroke = 0.5) + 
+    geom_abline(linetype = "dotted") + 
+    labs(x = "UMI count per cell PacBio", y = "UMI count per cell Illumina", 
+         fill = "Commonness", shape = "Sample") + 
+    stat_cor(aes(UMI_count_Pb, UMI_count_Ill, color = Commonness), method = "pearson", label.x.npc = "left", label.y.npc = "top", size = 8, inherit.aes = FALSE, show.legend = FALSE) + 
+    theme(text = element_text(size = 25), legend.position = "bottom") + 
+    scale_fill_manual(values = c("wheat3", "cyan", "#440154FF"), labels = c("Unique To ILL (CellRanger)", "Unique To PB (Iso-seq)", "Common")) + 
+    scale_x_log10() + 
+    scale_y_log10() +  
+    scale_shape_manual(values = c(21, 22, 23, 24, 25)) + 
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black", size = 3, stroke = 0.5),ncol = 1), shape = guide_legend(ncol=1)) + scale_color_manual(values = c("#A6761D", "cyan", "#440154FF")) 
+
+pdf("Figures_2025_RevisionsNAR/UMIs_per_cell.pdf", width = 11, height = 11)
+p1
+dev.off()
+```
+
+### Number of cells
+
+```{r, fig.width=6, fig.height=5, echo=FALSE, message=FALSE, warning=FALSE}
+df = UMIs %>% group_by(Sample, Commonness) %>% summarise(Cell_count = n_distinct(CB))
+df = df %>% pivot_wider(names_from = Commonness, values_from = Cell_count) %>% mutate("Illumina specific" = Common + `Unique to ILL`, "PacBio specific" = Common + `Unique to PB`) %>% replace(is.na(.), 0) %>% dplyr::select(Sample, Common, `Illumina specific`, `PacBio specific`) 
+
+pdf("Figures_2025_RevisionsNAR/Cell_Number.pdf", width=6, height=5)
+p2 = ggplot() + 
+    geom_bar(data = melt(df[,c(1,3,4)]), aes(Sample, value, fill = variable), position = "dodge", stat = "identity", show.legend = TRUE) + 
+    geom_bar(data=melt(df[c(1,2)]), stat="identity", aes(Sample, value, fill = variable), show.legend = TRUE) +
+    scale_fill_manual(name = "", values = myColors) + labs(y = "Number of Cells") + theme(legend.position = "top", text = element_text(size = 15))
+p2
+dev.off()
+```
+
+### UMIs
+
+Total UMI count per sample
+
+```{r, fig.width=6, fig.height=5, echo=FALSE, message=FALSE, warning=FALSE}
+
+p2 = merge(UMIs[,c(1,4,7)] %>% rownames_to_column() %>% 
+          dplyr::select("Sample", "TotalPB", "TotalIll") %>% 
+          unique() %>% 
+          filter(TotalPB > 0 & TotalIll >0) %>% 
+          melt() %>% 
+          mutate(variable = if_else(variable == "TotalPB", "PacBio", "Illumina")) %>% 
+          rename(UMIs = value) %>% mutate(UMIs = UMIs/1000000), 
+      x %>% 
+          rename("Number_of_reads" = value, Sample = Name), 
+      by = c("Sample", "variable")) %>% 
+    ggplot(aes(Number_of_reads, UMIs, color = variable, shape = Sample)) + 
+    geom_point(size = 5, stroke = 1.5) + scale_color_manual(values = myColors)+
+    stat_poly_line(aes(group = 1)) + stat_poly_eq() + stat_cor(aes(group = 1), method = "pearson", show.legend = FALSE, label.x.npc = "left", label.y.npc = "top", size = 5) + 
+    labs(y = "Total number of UMIs [Mio]", x = "Total number of reads [Mio]", color = "Method")  +  
+    scale_shape_manual(values = c(21, 22, 23, 24, 25))
+
+pdf("Figures_2025_RevisionsNAR/UMIs_vs_Reads.pdf", width = 6, height = 5)
+p2
+dev.off()
+
+```
+
+### Mitochondrial content
+
+```{r, fig.width=11, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
+MITO = bind_rows(mtcontent, .id = "Sample")
+MITO$Commonness = factor(MITO$Commonness, levels = c("Unique to ILL", "Unique to PB", "Common"))
+MITO$Sample = factor(MITO$Sample, levels = sample_data$Name)
+MITO = MITO %>% mutate(orderrank = if_else(Commonness == "Common", 2, 1))
+MITO <- MITO %>% arrange(orderrank)
+
+p3 = ggplot(MITO, aes(pbPercentMito, illPercentMito, group = Commonness)) + 
+    geom_point(aes(fill = Commonness, shape = Sample), color = "black", size = 3, stroke = 0.5) + 
+    geom_abline(linetype = "dotted") + 
+    labs(x = "Mitochondrial content per cell PacBio (%)", y = "Mitochondrial content per cell Illumina (%)", 
+         fill = "Commonness", shape = "Sample") + 
+    stat_cor(aes(pbPercentMito, illPercentMito, color = Commonness), method = "pearson", label.x.npc = "left", label.y.npc = "top", size = 8, inherit.aes = FALSE, show.legend = FALSE) + 
+    theme(text = element_text(size = 25), legend.position = "bottom") + 
+    scale_fill_manual(values = c("wheat3", "cyan", "#440154FF"), labels = c("Unique to ILL (CellRanger)", "Unique To PB (Iso-seq)", "Common")) + 
+    scale_x_log10() + 
+    scale_y_log10() +  
+    scale_shape_manual(values = c(21, 22, 23, 24, 25)) + 
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black", size = 3, stroke = 0.5), ncol = 1), shape = guide_legend(ncol = 1)) + scale_color_manual(values = c("#A6761D", "cyan", "#440154FF"))
+
+
+pdf("Figures_2025_RevisionsNAR/Mito_per_cell.pdf", width = 11, height = 11)
+p3
+dev.off()
+
+```
+
+
+```{r, fig.width=11, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
+MITO = bind_rows(mtcontent, .id = "Sample")
+MITO$Commonness = factor(MITO$Commonness, levels = c("Unique to ILL", "Unique to PB", "Common"))
+MITO$Sample = factor(MITO$Sample, levels = sample_data$Name)
+MITO = MITO %>% mutate(orderrank = if_else(Commonness == "Common", 2, 1))
+MITO <- MITO %>% arrange(orderrank)
+
+p3 = ggplot(MITO, aes(pbPercentMito, illPercentMito, group = Commonness)) + 
+    geom_point(aes(fill = Commonness, shape = Sample), color = "black", size = 3, stroke = 0.5) + 
+    geom_abline(linetype = "dotted") + 
+    labs(x = "Mitochondrial content per cell PacBio (%)", y = "Mitochondrial content per cell Illumina (%)", 
+         fill = "Commonness", shape = "Sample") + 
+    stat_cor(aes(pbPercentMito, illPercentMito, color = Commonness), method = "pearson", label.x.npc = "left", label.y.npc = "top", size = 8, inherit.aes = FALSE, show.legend = FALSE) + 
+    theme(text = element_text(size = 25), legend.position = "bottom") + 
+    scale_fill_manual(values = c("wheat3", "cyan", "#440154FF"), labels = c("Unique to ILL (CellRanger)", "Unique To PB (Iso-seq)", "Common")) + 
+    scale_shape_manual(values = c(21, 22, 23, 24, 25)) + 
+    guides(fill = guide_legend(override.aes = list(shape = 21, color = "black", size = 3, stroke = 0.5), ncol = 1), shape = guide_legend(ncol = 1)) + scale_color_manual(values = c("#A6761D", "cyan", "#440154FF"))
+
+
+pdf("Figures_2025_RevisionsNAR/Mito_per_cell_nolog.pdf", width = 11, height = 11)
+p3
+dev.off()
+
+```
+
+### TSO and PolyA reads
+
+```{r, fig.width=11, fig.height=4}
+df = bind_rows(tso, .id = "Sample")
+df$contaminants = case_when(df$ts == 1 & is.na(df$pa) ~ "TSO", df$pa == 1 & is.na(df$ts) ~ "polyA", df$ts == 1 & df$pa == 1 ~ "TSO+polyA", .default = "None")
+df$InPB = if_else(df$InPB == "InPB", "Common", "Unique to ILL")
+df$Sample = factor(df$Sample, levels = sample_data$Name)
+p4 = ggplot(df, aes(InPB, count, fill = contaminants)) + geom_bar(stat = "identity", position = "fill") + facet_grid(~Sample) + scale_fill_manual(values = myColors) + labs(x = "Cell category", y = "Proportion of reads") + theme(strip.text = element_text(size = 12), axis.text.y = element_text(size = 12), axis.text.x = element_text(size = 11, angle = 45, vjust = 1, hjust =1 ), legend.text = element_text(size = 12))
+
+pdf("Figures_2025_RevisionsNAR/TSO_per_sample.pdf", width = 11, height = 4)
+p4
+dev.off()
+
+```
+
+All samples together
+
+```{r, fig.width=5, fig.height=5}
+df = bind_rows(tso, .id = "Sample")
+df$contaminants = case_when(df$ts == 1 & is.na(df$pa) ~ "TSO", df$pa == 1 & is.na(df$ts) ~ "polyA", df$ts == 1 & df$pa == 1 ~ "TSO+polyA", .default = "None")
+df$InPB = if_else(df$InPB == "InPB", "Common", "Unique to ILL")
+df$Sample = factor(df$Sample, levels = sample_data$Name)
+p5 = ggplot(df, aes(InPB, count, fill = contaminants)) + geom_bar(stat = "identity", position = "fill") + scale_fill_manual(values = myColors) + labs(x = "Cell category", y = "Proportion of reads") + theme(strip.text = element_text(size = 12), axis.text.y = element_text(size = 12), axis.text.x = element_text(size = 11, angle = 45, vjust = 1, hjust =1 ), legend.text = element_text(size = 12))
+
+pdf("Figures_2025_RevisionsNAR/TSO_all.pdf", width = 5, height = 5)
+p5
+dev.off()
+```
+
+## Subset BAMs {.tabset}
+
+### Summary statistics
+
+Number of reads per tag ID
+
+```{r, fig.width=6, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+for (i in sample_data$Name){
+  print(data.frame(illGaList[[i]]) %>% group_by(tagId) %>% dplyr::summarise(count = n_distinct(qname)) %>% summarise(mean(count)))
+}
+for (i in sample_data$Name){
+  print(data.frame(pbGaList[[i]]) %>% group_by(tagId) %>% dplyr::summarise(count = n_distinct(qname)) %>% summarise(mean(count)))
+}
+```
+
+Unmapped and illStatus
+
+```{r, fig.width=6, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+for (i in sample_data$Name){
+  print(data.frame(pbGaDF[[i]]) %>% group_by(illUnmapped, illStatus) %>% dplyr::summarise(mean(gc), mean(qlength), mean(transcriptLength), count = n_distinct(tagId)) %>% ungroup() %>% mutate(prop = (count *100)/ sum(count)))
+}
+```
+
+What are the categories of the illAbsent reads
+
+```{r, fig.width=6, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+for (i in sample_data$Name){
+  print(data.frame(pbGaDF[[i]][pbGaDF[[i]]$illStatus == "illAbsent",]) %>% group_by(category) %>% dplyr::summarise(count = n()) %>% ungroup() %>% mutate(prop = (count *100)/ sum(count))%>% filter(category %in% c("full-splice_match", "incomplete-splice_match")) %>% dplyr::summarise(sum(prop)))
+}
+```
+
+What are the categories of the illDetected reads
+
+```{r, fig.width=6, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+for (i in sample_data$Name){
+    print(data.frame(pbGaDF[[i]][pbGaDF[[i]]$illStatus == "illDetected",]) %>% group_by(category) %>% dplyr::summarise(count = n()) %>% ungroup() %>% mutate(prop = (count *100)/ sum(count))%>% filter(category %in% c("full-splice_match", "incomplete-splice_match")) %>% dplyr::summarise(sum(prop)))
+}
+```
+
+What proportion of reads are unmapped by Illumina but mapped by PacBio
+
+
+```{r, fig.width=6, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
+for (i in names(pbGaDF)){
+  x = data.frame(pbGaDF[[i]])
+  xx = data.frame(illGaDF[[i]])
+  print(length(unique(x[which((!x$tagId %in% xx$tagId) & x$illUnmapped == "illUnmapped"),]$tagId))* 100/length(unique(x$tagId)))
+  print(length(unique(x[which((x$tagId %in% xx$tagId) & x$illUnmapped == "illUnmapped"),]$tagId))* 100/length(unique(x$tagId)))
+  print(mean(x[which((!x$tagId %in% xx$tagId) & x$illUnmapped == "illUnmapped"),]$qlength))
+  print(mean(x[x$illStatus == "illDetected",]$qlength))
+}
+```
+
+
+### Number of tagIds
+
+```{r, fig.width=6, fig.height=5, echo=FALSE, message=FALSE, warning=FALSE}
+tagIds = NULL
+for (i in sample_data$Name){
+  x = data.frame(pbGaDF[[i]]) %>% group_by(illStatus) %>% dplyr::summarise(count = n_distinct(tagId)) %>% mutate(Sample = i) %>% rename("Status" = "illStatus")
+  y = data.frame(illGaDF[[i]]) %>% group_by(pbStatus) %>% dplyr::summarise(count = n_distinct(tagId)) %>% mutate(Sample = i) %>% rename("Status" = "pbStatus")
+  tagIds = rbind(tagIds, rbind(x, y))
+}
+tagIds = tagIds %>% mutate(Status = if_else(Status %in% c("illDetected", "pbDetected"), "Common", Status)) %>% unique() %>% pivot_wider(names_from = Status, values_from = count) %>% mutate("PacBio" = illAbsent + Common, "Illumina" = pbAbsent + Common) %>% dplyr::select(Sample, Common, PacBio, Illumina)
+tagIds$Sample = factor(tagIds$Sample, levels = sample_data$Name)
+tagIds[,c(2,3,4),] = tagIds[,c(2,3,4),]/1000000
+
+ggplot() + 
+    geom_bar(data = melt(tagIds[c(1,3,4)]), aes(Sample, value, fill = factor(variable, levels = c("Illumina", "PacBio", "Common"))), position = "dodge", stat = "identity", show.legend = TRUE) + 
+    geom_bar(data=melt(tagIds[c(1,2)]), stat="identity", aes(Sample, value, fill = variable), show.legend = TRUE) +
+    scale_fill_manual(name = "", values = myColors, labels=c("Illumina","PacBio", "Common")) +
+    labs(y = "Number of Cell Barcode-UMI tags [mio]") + theme(legend.position = "top", text = element_text(size = 15))
+
+#geom_text(data = melt(shareddf[c(1,2,5)], id.vars = c("Percentage", "Sample")), aes(Sample, value - 400, label = paste0(Percentage, "%")), color="white", size=3.5)
+```
+
+
+```{r, include=FALSE}
+
+#Count how many are multimapping and counted
+multimappers = NULL
+for (i in sample_data$Name){
+  x = data.frame(pbGaDF[[i]][pbGaDF[[i]]$illStatus == "illDetected"]) %>% 
+    mutate(quality = if_else(quality == "Pass", "Counted", "NotCounted")) %>% 
+    group_by(multiMapping, quality) %>% 
+    dplyr::summarise(count = n_distinct(tagId)) %>% 
+    mutate(Sample = i, Method = "PacBio")
+  x$Percentage = (x$count* 100)/sum(x$count)
+  
+  y = data.frame(illGaDF[[i]][illGaDF[[i]]$pbStatus == "pbDetected",]) %>% 
+    mutate(multiMapping = if_else(NH == 1, "Uniquely mapping", "Multi mapping"), quality = umiCount) %>% 
+    group_by(multiMapping, quality) %>% 
+    dplyr::summarise(count = n_distinct(tagId)) %>% 
+    mutate(Sample = i, Method = "Illumina", Percentage = (count * 100)/sum(count))
+  y$Percentage = (y$count* 100)/sum(y$count)
+  
+  multimappers = rbind(multimappers, rbind(x,y))
+}
+
+#What are the categories of PacBio artefacts
+
+sub_data = NULL
+for (i in sample_data$Name){
+  x = data.frame(pbGaDF[[i]][pbGaDF[[i]]$illStatus == "illDetected"]) %>% 
+    mutate(quality2 = case_when(quality == "Pass" ~ "Counted", quality == "LowCoverage/Non-Canonical" ~  "LCNC", .default = quality)) %>% 
+    group_by(multiMapping, quality2) %>% 
+    dplyr::summarise(count = n_distinct(tagId)) %>% 
+    mutate(Sample = i, Method = "PacBio")
+  x$proportion = (x$count* 100)/sum(x$count)
+  sub_data = rbind(sub_data, x)
+}
+
+
+#Which reads map to the same locations?
+
+overlap = NULL
+for (i in sample_data$Name){
+  y = data.frame(illGaDF[[i]][illGaDF[[i]]$pbStatus == "pbDetected",]) %>% 
+    mutate(multiMapping = if_else(NH == 1, "Uniquely mapping", "Multi mapping"), quality = umiCount) %>% 
+    group_by(multiMapping, quality, overlapsPbAlign) %>% 
+    dplyr::summarise(count = n_distinct(tagId)) %>% 
+    mutate(Percentage = (count * 100) / sum(count), Sample = i, category = paste(quality, multiMapping), overlapsPbAlign = if_else(overlapsPbAlign == "hasOverlapPb", "Same location", "Different location"))
+  y$Method = "Illumina"
+  
+  x = data.frame(illGaDF[[i]][illGaDF[[i]]$pbStatus == "pbDetected" & illGaDF[[i]]$overlapsPbAlign == "hasOverlapPb",])
+  x = x[,c(15,19,22)]
+  
+  z = data.frame(pbGaDF[[i]][pbGaDF[[i]]$illStatus == "illDetected",])
+  z = merge(z, x, by = c("Sample", "tagId"), all.x = TRUE) %>% replace(is.na(.), "noOverlapPb")
+  z = z %>% 
+    mutate(quality2 = case_when(quality == "Pass" ~ "Counted", quality == "LowCoverage/Non-Canonical" ~  "LCNC", .default = quality)) %>% 
+    mutate(quality = if_else(quality == "Pass", "Counted", "NotCounted")) %>% 
+    group_by(multiMapping, quality, quality2, overlapsPbAlign) %>% 
+    dplyr::summarise(count = n_distinct(tagId)) %>% 
+    mutate(Sample = i, Method = "PacBio") %>% 
+    mutate(Percentage = (count * 100) / sum(count), Sample = i, category = paste(quality, multiMapping), overlapsPbAlign = if_else(overlapsPbAlign == "hasOverlapPb", "Same location", "Different location"))
+  
+  zy = rbind(z,y)
+  overlap = rbind(overlap, zy)
+}
+
+```
+
+### Common tagIds - classification
+
+```{r, fig.width=25, fig.height=10, echo=FALSE, message=FALSE, warning=FALSE}
+
+
+ggplot(multimappers, aes(x = "", y = count, fill = paste(quality, multiMapping))) + 
+  geom_bar(stat = 'identity', position = position_fill())  +
+  coord_polar(theta = "y")+
+  facet_wrap(Method~factor(Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5")), ncol=5)+
+  theme_void() +
+  scale_fill_manual(values = c("red", "darkcyan", "black", "grey")) + 
+  geom_text(aes(label = ifelse(Percentage < 1, "", round(as.integer(Percentage),2))),
+              position = position_fill(vjust = 0.5), color = "yellow", size = 10) +
+  labs(fill = "Category") + ggtitle("Common cell barcode-UMI combinations") +
+  theme(text = element_text(size = 25), legend.text = element_text(size = 15))
+```
+
+
+Why are the reads discarded in PacBio
+
+```{r, fig.width=25, fig.height=10, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot() + geom_bar(data= multimappers, aes(x = "", y = Percentage, fill = factor(paste(quality, multiMapping), levels = c("Counted Multi mapping", "Counted Uniquely mapping", "NotCounted Multi mapping","NotCounted Uniquely mapping")), width = 10), stat = 'identity')  +
+  coord_polar(theta = "y") +
+  facet_wrap(Method~factor(Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5")), ncol=5, scales = "free") + theme_classic() + 
+    theme(axis.line = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks = element_blank(),
+          plot.title = element_text(hjust = 0.5, color = "#666666"), 
+          strip.text = element_text(size = 13), 
+          legend.text = element_text(size = 13)) +
+  labs(fill = "Category") + 
+  geom_bar(data = sub_data, aes(x = "", y = proportion, fill = quality2), stat = "identity", width = 3) + 
+  facet_grid(Method~factor(Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5"))) +
+  coord_polar("y") + theme_classic()  + 
+    theme(axis.line = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks = element_blank(),
+          plot.title = element_text(hjust = 0.5, color = "#666666"), 
+          strip.text = element_text(size = 13), 
+          legend.text = element_text(size = 13), legend.position = "bottom", guides(fill=guide_legend(ncol=2))) +
+  scale_fill_manual(values = c("red", "darkcyan", "black","grey", "darkcyan","orange", "purple", "brown", "blue")) + 
+  geom_text(data = multimappers, aes(x = "", y = Percentage, fill = factor(paste(quality, multiMapping), levels = c("Counted Multi mapping", "Counted Uniquely mapping", "NotCounted Multi mapping","NotCounted Uniquely mapping")), label = ifelse(Percentage < 1, "", round(as.integer(Percentage),0))),
+              position = position_stack(vjust = 0.5), color = "yellow", size = 10) +
+  theme(text = element_text(size = 30), legend.text = element_text(size = 26), strip.text = element_text(size = 27), legend.key.size = unit(1.5, "cm")) + labs(y = "", x = "")
+```
+
+
+```{r, fig.width=10, fig.height=15, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot() + geom_bar(data= multimappers, aes(x = "", y = Percentage, fill = factor(paste(quality, multiMapping), levels = c("Counted Multi mapping", "Counted Uniquely mapping", "NotCounted Multi mapping","NotCounted Uniquely mapping")), width = 10), stat = 'identity')  +
+  coord_polar(theta = "y") +
+  facet_wrap(factor(Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5")) ~ Method, ncol=5, scales = "free") + theme_classic() + 
+    theme(axis.line = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks = element_blank(),
+          plot.title = element_text(hjust = 0.5, color = "#666666"), 
+          strip.text = element_text(size = 13), 
+          legend.text = element_text(size = 13)) +
+  labs(fill = "Category") + 
+  geom_bar(data = sub_data, aes(x = "", y = proportion, fill = quality2), stat = "identity", width = 3) + 
+  facet_grid(factor(Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5")) ~ Method) +
+  coord_polar("y") + theme_classic()  + 
+    theme(axis.line = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks = element_blank(),
+          plot.title = element_text(hjust = 0.5, color = "#666666"), 
+          strip.text = element_text(size = 13), 
+          legend.text = element_text(size = 13), guides(fill=guide_legend(ncol=1))) +
+  scale_fill_manual(values = c("red", "darkcyan", "black","grey", "darkcyan","orange", "purple", "brown", "blue")) + 
+  geom_text(data = multimappers, aes(x = "", y = Percentage, fill = factor(paste(quality, multiMapping), levels = c("Counted Multi mapping", "Counted Uniquely mapping", "NotCounted Multi mapping","NotCounted Uniquely mapping")), label = ifelse(Percentage < 1, "", round(Percentage,0))),
+              position = position_stack(vjust = 0.5), direction = "x", color = "yellow", size = 8) +
+  theme(text = element_text(size = 15), legend.text = element_text(size = 15), strip.text = element_text(size = 20), legend.key.size = unit(1.5, "cm")) + labs(y = "", x = "")
+```
+
+
+Mapping location of the common tagIds
+
+```{r, fig.width=20, fig.height=15}
+
+ggplot(overlap[overlap$Method == "Illumina",], aes(x = "", y = count, fill = overlapsPbAlign)) + 
+  geom_bar(stat = 'identity', position = position_fill())  + 
+  facet_wrap(category~factor(Sample, levels = c("Normal", "ccRCC_2", "ccRCC_3", "ccRCC_4", "ccRCC_5")), ncol=5) +
+  coord_polar(theta = "y") + 
+  theme_void() + 
+  labs(fill = "Category") + ggtitle("Common cell barcode-UMI combinations") +
+  theme(text = element_text(size = 10), legend.text = element_text(size = 10)) +
+  geom_text(aes(label = ifelse(Percentage < 0.09, "", round(Percentage,1))),
+            position = position_fill(vjust = 0.5), color = "yellow", size = 7) + 
+  scale_fill_manual(values = c("#00BFC4", "#F8766D"))
+```
+
+
+```{r, fig.width=10, fig.height=6}
+ggplot(overlap[overlap$Method == "Illumina",], aes(category, Percentage, fill = overlapsPbAlign)) + 
+  geom_bar(position = "fill", stat = "identity") + 
+  facet_grid(~factor(Sample, levels = sample_data$Name)) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, color = c("red", "darkcyan", "black", "darkgrey"), size = 10), strip.text = element_text(size = 13), axis.text.y = element_text(size = 12), legend.position = "top", legend.text = element_text(size = 15)) +
+  scale_fill_manual(values = c("#A6761D", "#440154FF")) + labs(x  = "", fill = "Mapping location", y = "proportion")
+```
+
+```{r, fig.width=10, fig.height=15}
+ggplot(overlap[overlap$Method == "Illumina",], aes(category, Percentage, fill = overlapsPbAlign)) + 
+  geom_bar(position = "fill", stat = "identity") + 
+  facet_wrap(~factor(Sample, levels = sample_data$Name), ncol = 2) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 1, color = c("red", "darkcyan", "black", "darkgrey"), size = 15), strip.text = element_text(size = 13), axis.text.y = element_text(size = 12), legend.position = "top", legend.text = element_text(size = 15)) +
+  scale_fill_manual(values = c("#A6761D", "#440154FF")) + labs(x  = "", fill = "Mapping location", y = "proportion")
+```
+
+
+
+```{r, fig.width=10, fig.height=5}
+ggplot(overlap[overlap$Method == "Illumina",], aes(overlapsPbAlign, count, fill = category)) + 
+    geom_bar(position = "fill", stat = "identity") + 
+    facet_grid(~factor(Sample, levels = sample_data$Name)) +
+    scale_fill_manual(values = c("red", "darkcyan", "black", "grey")) + 
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 11),strip.text = element_text(size = 13), axis.text.y = element_text(size = 12)) + labs(x = "Illumina alignment", y = "proportion")
+```
+
+
+Combination of all of the above plots in a sankey plot
+
+```{r, fig.width=16, fig.height=11}
+
+data = 
+  merge(multimappers[,c(4,5,1,2,3)] %>% group_by(Method,multiMapping,quality) %>% summarise(count= sum(count)) %>% ungroup(),
+  sub_data %>% mutate(quality = if_else(quality2 == "Counted", "Counted", "NotCounted")) %>% dplyr::select(5,4,1,7,2,3) %>% group_by(Method,multiMapping,quality,quality2) %>% summarise(count= sum(count)) %>% ungroup(), by = c("Method", "multiMapping", "quality"), all.x = TRUE) %>% replace(is.na(.), 0) %>% mutate(count.y = if_else(count.y == 0, count.x, count.y)) %>% mutate(quality2 = case_when(Method == "Illumina" & quality == "Counted" ~ "Counted", Method == "Illumina" & quality == "NotCounted" ~ "NotCounted", Method == "PacBio" & quality == "Counted" ~ "Counted", Method == "PacBio" & quality == "NotCounted" ~ quality2)) %>% dplyr::select(-4)
+
+helper_after_stat <- function(x, value, label) {
+    data.frame(x = x, value = value, label = label) %>% 
+        group_by(x) %>% 
+        mutate(value_p = round(value / sum(value),3),
+               label = paste(str_wrap(label,12), scales::percent(value_p), sep = "\n")) %>%
+        pull(label)
+}
+  
+data <- gather_set_data(data, 1:4)
+data$y = factor(data$y , levels = c("Illumina","PacBio",  "Multi mapping", "Uniquely mapping", "Counted", "NotCounted", "RTSwitching", "IntraPriming", "LCNC", "Unknown"))
+
+p6 = ggplot(data, aes(x, id = id, split = y, value = count.y)) +
+    geom_parallel_sets(aes(fill = Method), alpha = 0.5) +
+    geom_parallel_sets_axes(axis.width = 0.3, color = "darkgrey", fill = "white") +
+    geom_parallel_sets_labels(aes(label = after_stat(helper_after_stat(x, value, label))), colour = 'black', angle = 0, size = 6) + scale_fill_manual(values = myColors) + theme_no_axes() + theme(legend.position = "bottom", legend.text = element_text(size = 20), legend.title = element_text(size = 20)) + labs(fill = "Method")
+
+pdf("Figures_2025_RevisionsNAR/sankey_plot.pdf", width = 16, height = 11)
+p6
+dev.off()
+
+```
+
+Sankey for mapping location
+
+```{r, fig.width=18, fig.height=11}
+
+overlaps = overlap %>% group_by(Method, multiMapping,quality,quality2, overlapsPbAlign) %>% summarise(count = sum(count)) 
+overlaps = overlaps %>% mutate(quality2 = if_else(is.na(quality2) == TRUE, quality, quality2))
+data = gather_set_data(overlaps[,c(1,2,5,3,4,6)], 1:5)
+
+data$y = factor(data$y , levels = c("Illumina","PacBio",  "Multi mapping", "Uniquely mapping", "Different location", "Same location", "Counted", "NotCounted", "RTSwitching", "IntraPriming", "LCNC", "Unknown"))
+
+p7 = ggplot(data, aes(x, id = id, split = y, value = count)) +
+    geom_parallel_sets(aes(fill = Method), alpha = 0.5) +
+    geom_parallel_sets_axes(axis.width = 0.3, color = "darkgrey", fill = "white") +
+    geom_parallel_sets_labels(aes(label = after_stat(helper_after_stat(x, value, label))), colour = 'black', angle = 0, size = 7) + theme_no_axes() + theme(legend.position = "bottom", legend.text = element_text(size = 20), legend.title = element_text(size = 20)) + labs(fill = "Mapping location") + scale_fill_manual(values = myColors) + labs(fill = "Method")
+
+pdf("Figures_2025_RevisionsNAR/sankey_plot_maplocation.pdf", width = 18, height = 11)
+p7
+dev.off()
+
+```
+
+
+### Annotation of common tagids
+
+```{r, fig.width=20, fig.height=7}
+classification = NULL
+for (i in sample_data$Name){
+  x = pbGaDF[[i]]
+  y = illGaDF[[i]]
+  y = data.frame(y)[,c("tagId", "RE", "pbStatus")] %>% unique()
+  x = data.frame(x)[,c("tagId", "category", "illStatus", "illUnmapped")] %>% unique()
+  x = x %>% mutate(illStatus = if_else(illStatus == "illAbsent" & !is.na(illUnmapped), "illUnmapped", illStatus)) %>% dplyr::select("tagId", "category", "illStatus")
+  xy = merge(x, y, by = "tagId", all = TRUE)  %>% mutate(category = if_else(is.na(category), "undetected", category), RE = case_when(is.na(RE) & illStatus != "illUnmapped" ~ "undetected", is.na(RE) & illStatus == "illUnmapped" ~ "Unmapped", .default = RE)) %>% dplyr::select(tagId, category, RE)
+  xy = xy %>% group_by(category, RE) %>% dplyr::summarise(count = n()) %>% pivot_wider(names_from = RE, values_from = count) %>% replace(is.na(.), 0) %>% mutate(category = case_when(category == "full-splice_match" ~ "FSM", category == "incomplete-splice_match" ~ "ISM", category == "novel_in_catalog" ~ "NIC", category == "novel_not_in_catalog" ~ "NNC", .default = category)) %>% column_to_rownames("category") %>% rownames_to_column("PacBio") %>% melt() %>% mutate(Sample = i)
+  classification = rbind(classification,xy)
+}
+
+classification = classification[classification$PacBio %in% c("FSM", "ISM", "NNC", "NIC", "genic", "unannotated", "intergenic", "undetected"),]
+classification$PacBio = factor(classification$PacBio, levels = c("FSM", "ISM", "NNC", "NIC", "genic", "unannotated", "intergenic", "undetected"))
+classification$Sample = factor(classification$Sample, levels = sample_data$Name)
+classification = classification %>% mutate(variable = case_when(variable == "E" ~ "Exon", variable == "I" ~ "Intergenic", variable == "N" ~ "Intron" , variable == "undetected" ~ "undetected", variable == "Unmapped" ~ "Unmapped"))
+
+ggplot(data = classification[!(classification$PacBio == "undetected" & classification$variable == "undetected"),] %>% mutate(value2 = round(value/100, 1)), 
+       mapping = aes(x = variable, y = PacBio, fill = log(value+ 1))) + 
+    geom_tile() +
+    scale_fill_gradient2(high = "red", mid = "white", low = "blue", midpoint = 9, name = "Log(Abundance)") +
+    geom_text(aes(label = value2), size = 2.7) +
+    facet_grid(~Sample, switch = "x", scales = "free_x", space = "free_x") +
+    theme_bw() + labs(x = "Illumina") + theme(axis.text.x = element_text(angle=45, hjust = 1, vjust = 1), legend.position = "top")
+```
+
+
+```{r, fig.width=20, fig.height=7}
+library(viridis)
+ggplot(data = classification[!(classification$PacBio == "undetected" & classification$variable == "undetected") & !(classification$PacBio == "undetected" & classification$variable == "Unmapped"),] %>% mutate(value2 = round(value/100, 1)), 
+       mapping = aes(x = variable, y = PacBio, fill = log(value+ 1))) + 
+    geom_tile() +
+    scale_fill_viridis(name = "Log(Abundance)") +
+    geom_text(aes(label = value2), size = 5) +
+    facet_grid(~Sample, switch = "x", scales = "free_x", space = "free_x") +
+    theme_bw() + labs(x = "Illumina") + theme(axis.text.x = element_text(angle=45, hjust = 1, vjust = 1), legend.position = "top")
+```
+
+
+```{r, fig.width=7, fig.height=10}
+x = classification[!(classification$PacBio == "undetected" & classification$variable == "undetected") & !(classification$PacBio == "undetected" & classification$variable == "Unmapped"),] %>% mutate(value2 = round(value/100, 1))
+
+x = x %>% group_by(Sample) %>% mutate(value3 = round((value* 100)/sum(value), 1)) %>% ungroup()
+
+p8 = ggplot(data = x, 
+       mapping = aes(x = variable, y = PacBio, fill = log(value+ 1))) + 
+    geom_tile() +
+    scale_fill_viridis(name = "Log(Abundance)") +
+    geom_text(aes(label = value3), size = 4) +
+    facet_wrap(~Sample, strip.position = "bottom", ncol = 2) +
+    theme_bw() + labs(x = "Illumina") + theme(axis.text.x = element_text(angle=45, hjust = 1, vjust = 1), legend.position = "top", strip.text.x = element_text(size = 11))
+
+pdf("Figures_2025_RevisionsNAR/gene_categories_representation_IllPac.pdf", width = 7, height = 10)
+p8
+dev.off()
+
+```
+
+```{r, fig.width=15, fig.height=6}
+x = classification[!(classification$PacBio == "undetected" & classification$variable == "undetected") & !(classification$PacBio == "undetected" & classification$variable == "Unmapped"),] %>% mutate(value2 = round(value/100, 1))
+
+x = x %>% group_by(Sample) %>% mutate(value3 = round((value* 100)/sum(value), 1)) %>% ungroup()
+
+p9 = ggplot(data = x, 
+       mapping = aes(x = variable, y = PacBio, fill = log(value+ 1))) + 
+    geom_tile() +
+    scale_fill_viridis(name = "Log(Abundance)") +
+    geom_text(aes(label = value3), size = 4) +
+    facet_grid(~Sample) +
+    theme_bw() + labs(x = "Illumina") + theme(axis.text.x = element_text(angle=45, hjust = 1, vjust = 1), legend.position = "top", strip.text.x = element_text(size = 11))
+
+pdf("Figures_2025_RevisionsNAR/gene_categories_representation_IllPac_horizontal.pdf", width = 15, height = 5)
+p9
+dev.off()
+
+```
+
+
+### Correlation between Illumina and Pacbio divided by width and GC content
+
+```{r, fig.width=11, fig.height=10}
+correlation = NULL
+for (i in sample_data$Name){
+  pbGaDF[[i]]$gcClasses = ezCut(pbGaDF[[i]]$gc, breaks = seq(0.3, 0.7, 0.1))
+  pbGaDF[[i]]$widthClasses = ezCut(log2(pbGaDF[[i]]$qlength), breaks = 7:11)
+  df = data.frame(pbGaDF[[i]])
+  correlation = rbind(correlation, df)
+}
+
+
+for (i in sample_data$Name){
+  df = data.frame(pbGaDF[[i]])
+  illFrac <- tapply(as.integer(df$illStatus == "illDetected"), INDEX = list(width=df$widthClasses,
+                                                                            gc=df$gcClasses), FUN = mean)
+  corrplot::corrplot(illFrac, is.corr=FALSE, method = "pie", title = "Fraction of Pacbio reads common with Illumina", xlab="GC", ylab="log2 width", mar=c(0,2,2,0))
+  mtext("GC content", side = 3, line=1)
+  mtext("Log2 of read width", side = 2, line=2)
+}
+```
+
+```{r, fig.width=11, fig.height=10}
+
+illFrac <- tapply(as.integer(correlation$illStatus == "illDetected"), INDEX = list(width=correlation$widthClasses, gc=correlation$gcClasses), FUN = mean)
+
+pdf("Figures_2025_RevisionsNAR/corrplot_length_GC_categories.pdf", width = 11, height = 10)
+corrplot::corrplot(illFrac, is.corr=FALSE, method = "pie", title = "Fraction of Pacbio reads common with Illumina", xlab="GC", ylab="log2 width", mar=c(0,2,2,0), tl.col = "black")
+mtext("GC content", side = 3, line=1)
+mtext("Log2 of read width", side = 2, line=2)
+dev.off()
+```
+
+Or only width
+
+```{r, fig.width=4, fig.height=10}
+
+illFrac <- tapply(as.integer(correlation$illStatus == "illDetected"), INDEX = list(width=correlation$widthClasses, gc=rep(1, length(correlation$widthClasses))), FUN = mean)
+pdf("Figures_2025_RevisionsNAR/corrplot_length_categories.pdf", width = 6, height = 6)
+corrplot::corrplot(t(illFrac), is.corr=FALSE, method = "pie", xlab="log2 width", ylab="log2 width", mar=c(0,0,0,0), tl.col = "black",col.lim = c(0.2,0.85), tl.cex = 2)
+mtext("Log2 of read width", side = 3, line=1)
+mtext("", side = 2, line=2)
+dev.off()
+```
+

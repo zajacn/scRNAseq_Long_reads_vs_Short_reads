@@ -1,5 +1,7 @@
 cd /srv/GT/analysis/zajacn/p28443/p28443_o31598_2/
 
+#Run pigeon on each SMRTcell seaprately - check for batch effects
+
 #3_D01
 /srv/GT/software/SMRTtools/SMRT_Link_v10/smrtcmds/bin/pigeon make-seurat --keep-ribo-mito-genes \
 --log-level INFO \
@@ -32,6 +34,8 @@ cd /srv/GT/analysis/zajacn/p28443/p28443_o31598_2/
 --out-dir p28443_o31598_2_1_B01_getMTinfo_unfiltered \
 --out-prefix scisoseq \
 /misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/pb_segment_reads_and_sc_isoseq/54642992-8a09-448b-9424-5129adeb3959/call-pb_sc_isoseq/pb_sc_isoseq/76f446f3-8bfa-49af-8683-84e1e0236f21/call-pigeon/execution/scisoseq_classification.filtered_lite_classification.txt
+
+#Run pigeon on all cells together for final analysis
 
 #3cells_combined
 /srv/GT/software/SMRTtools/SMRT_Link_v10/smrtcmds/bin/pigeon make-seurat --keep-ribo-mito-genes \

@@ -1,12 +1,13 @@
 #!/usr/bin/Rscript
 
-# cmd <- paste("/misc/ngseq10/packages/Aligner/CellRanger/7.2.0/bin/cellranger mkref 
-#              --genome Homo_sapiens_SMRTLinkgenome 
-#              --fasta=/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/sl_unzip_datasets/5c640510-4bee-4ae8-b642-48ed209b79bb/call-unzip_datasets/execution/human_GRCh38_no_alt_analysis_set.fasta
-#              --genes=/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/sl_unzip_datasets/5c640510-4bee-4ae8-b642-48ed209b79bb/call-unzip_datasets/execution/gencode.v39.annotation.sorted.gtf 
-#              --memgb 20 
-#              --output-dir /srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/genes_10XGEX_SC_SMRTLink_Index")
-# ezSystem(cmd)
+#Create reference files for CellRanger
+cmd <- paste("/misc/ngseq10/packages/Aligner/CellRanger/7.2.0/bin/cellranger mkref
+             --genome Homo_sapiens_SMRTLinkgenome
+             --fasta=/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/sl_unzip_datasets/5c640510-4bee-4ae8-b642-48ed209b79bb/call-unzip_datasets/execution/human_GRCh38_no_alt_analysis_set.fasta
+             --genes=/misc/sequel2/SMRTLink_v10_dataOutput/cromwell-executions/sl_unzip_datasets/5c640510-4bee-4ae8-b642-48ed209b79bb/call-unzip_datasets/execution/gencode.v39.annotation.sorted.gtf
+             --memgb 20
+             --output-dir /srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/genes_10XGEX_SC_SMRTLink_Index")
+ezSystem(cmd)
 
 #Run CellRanger
 library(stringr)

@@ -1,0 +1,28 @@
+Diff	PacBio	Illumina	Category
+TSO artifact removal	1	0	Wet-lab
+DNA Damage Repair	1	0	Wet-lab
+Removal of incomplete templates	1	0	Wet-lab
+Concatentation of full-length transcripts	1	0	Wet-lab
+Fragmentation	0	1	Wet-lab
+Fragment Size Selection	0	1	Wet-lab
+End Repair and A-tailing	0	1	Wet-lab
+Beads Cleanup	1	1	Wet-lab
+CB Correction before Mapping	1	0	Cell-barcode Correction
+Matching Barcodes to Whitelist	1	1	Cell-barcode Correction
+Distance-based	1	1	Cell-barcode Correction
+Error-model based	0	1	Cell-barcode Correction
+Marking of failing CB	1	0	Cell-barcode Correction
+UMI correction	0	1	Cell-barcode Correction
+High RNA content Cell Identification	1	1	Cell Calling
+Low RNA content Cell Identification	0	1	Cell Calling
+De-dup before Mapping	1	0	Read Deduplication
+Grouping by Cell Barcode and UMI	1	1	Read Deduplication
+Grouping by Gene Annotation	0	1	Read Deduplication
+Grouping by Length	1	0	Read Deduplication
+Grouping by Pairwise Concordance	1	0	Read Deduplication
+Isoform Filtering	1	0	UMI Counting
+Assembly of count matrix per Gene	1	1	UMI Counting
+Assembly of count matrix per Isoform	1	0	UMI Counting
+PolyA-tail Trimming	1	1	Read Trimming
+TSO Removal	0	1	Read Trimming
+

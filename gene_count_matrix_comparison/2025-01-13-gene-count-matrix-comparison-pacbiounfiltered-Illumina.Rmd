@@ -38,7 +38,7 @@ library(gridExtra)
 library(ggbeeswarm)
 
 source("functions.R")
-sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
+sample_data = ezRead.table("../2024-05-22-sampleInfo.tsv")
 ##Load all pacbio dirs
 pbDirs <- file.path(sample_data$PigeonUnfiltered, "genes_seurat/")
 
@@ -270,6 +270,7 @@ illumina_pseudobulk <- lapply(seurat_IllDataList, function(scData){
   rowSums(scData[["RNA"]]$counts)
 })
 
+pdf("Figures_2025_RevisionsNAR/Pseudobulk_gene_expression_allcells.pdf", width=7, height=18)
 op = par(mfrow=c(5,2), mar = c(3,4.5,2,2))
 final_toCounts_all = NULL
 for (i in names(illumina_pseudobulk)){
@@ -290,9 +291,9 @@ for (i in names(illumina_pseudobulk)){
   xNorm <- ezScaleColumns(totCounts, sf)
   ezXYScatter(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10, xlab = "Illumina", ylab = "PacBio", types = gcTypes, main = i, cex = 1, cex.lab = 2)
   x = cor.test(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10,  method = "pearson")
-  legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
+  legend(x='topleft', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
   ezXYScatter(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10, xlab = "Illumina", ylab = "PacBio", types = widthTypes, main = i, cex = 1, cex.lab =2)
-  legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
+  legend(x='topleft', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
   xNorm = xNorm %>% rownames_to_column()
   xNorm = xNorm %>% mutate( if_else(xNorm[,2] > 0, 1, 0), if_else(xNorm[,3] > 0, 1, 0))
   xNorm = xNorm[,c(1,4,5)]
@@ -300,6 +301,7 @@ for (i in names(illumina_pseudobulk)){
   final_toCounts_all[[i]] = xNorm[!duplicated(xNorm$Gene),]
 }
 par(op)
+dev.off()
 ```
 
 ### Overlap in the detected genes common cells
@@ -350,6 +352,7 @@ for (i in names(seurat_IllDataList)){
   illumina_pseudobulk_c[[i]] = rowSums(scData)
 }
 
+pdf("Figures_2025_RevisionsNAR/Pseudobulk_gene_expression_commonCells.pdf", width=7, height=18)
 op = par(mfrow=c(5,2), mar = c(3,4.5,2,2))
 final_toCounts = NULL
 n = 1
@@ -370,11 +373,11 @@ for (i in names(illumina_pseudobulk_c)){
                         check.names=FALSE)
   sf <- ezLogmeanScalingFactor(totCounts, presentFlag = totCounts >0)
   xNorm <- ezScaleColumns(totCounts, sf)
-  ezXYScatter(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10, xlab = "Illumina", ylab = "PacBio", types = gcTypes, main = i, cex = 1, cex.lab = 2, cex.main = 2)
+  ezXYScatter(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10, xlab = "Normalized Log-Mean Illumina", ylab = "Normalized Log-Mean PacBio", types = gcTypes, main = i, cex = 1, cex.lab = 2, cex.main = 2)
   x = cor.test(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10,  method = "pearson")
-  legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
-  ezXYScatter(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10, xlab = "Illumina", ylab = "PacBio", types = widthTypes, main = i, cex = 1, cex.lab =2, cex.main = 2)
-  legend(x='topright', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
+  legend(x='topleft', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
+  ezXYScatter(xNorm[ , "Illumina"]+10, xNorm[ ,  "PacBio"]+ 10, xlab = "Normalized Log-Mean Illumina", ylab = "Normalized Log-Mean PacBio", types = widthTypes, main = i, cex = 1, cex.lab =2, cex.main = 2)
+  legend(x='topleft', legend=paste('R=', round(x$estimate,4)), cex = 1.8)
   xNorm = xNorm %>% rownames_to_column()
   colnames(xNorm) = c("Gene", "PacBio", "Illumina")
   xNorm = xNorm %>% mutate( if_else(xNorm[,2] > 0, 1, 0), if_else(xNorm[,3] > 0, 1, 0))
@@ -384,6 +387,7 @@ for (i in names(illumina_pseudobulk_c)){
   n = n + 1
 }
 par(op)
+dev.off()
 ```
 
 ### Overlap in the detected genes common cells {.tabset}
@@ -463,13 +467,14 @@ shareddf = shareddf[shareddf$Category != "Absent",]
 shareddf = shareddf %>% pivot_wider(names_from = Category, values_from = count) %>% mutate(Illumina = Illumina + Common, PacBio = PacBio + Common)
 shareddf$Percentage = round((shareddf$Common * 100) / ((shareddf$Illumina - shareddf$Common) + (shareddf$PacBio - shareddf$Common) + shareddf$Common), 1)
 
-
+pdf("Figures_2025_RevisionsNAR/Common_genes_CommonCells.pdf", width=6, height=5)
 ggplot() + 
   geom_bar(data = melt(shareddf[c(1,3,4)]), aes(Sample, value, fill = variable), position = "dodge", stat = "identity", show.legend = TRUE) + 
   geom_bar(data=melt(shareddf[c(1,2)]), stat="identity", aes(Sample, value, fill = variable), show.legend = TRUE) +
   scale_fill_manual(name = "", values = myColors, labels=c("Illumina","PacBio","Common")) +
   labs(y = "Number of Genes") +
-  geom_text(data = melt(shareddf[c(1,2,5)], id.vars = c("Percentage", "Sample")), aes(Sample, value - 400, label = paste0(Percentage, "%")), color="white", size=3.5) + theme(legend.position = "top", legend.text = element_text(size = 13))
+  geom_text(data = melt(shareddf[c(1,2,5)], id.vars = c("Percentage", "Sample")), aes(Sample, value - 400, label = paste0(Percentage, "%")), color="white", size=3.5) + theme(legend.position = "top", legend.text = element_text(size = 13), axis.text.y = element_text(size = 16), axis.title.y = element_text(size = 16), axis.text.x = element_text(size = 14))
+dev.off()
 ```
 
 
@@ -552,6 +557,7 @@ df2$Data = "PacBio"
 
 df = rbind(df1A, df1B, df2)
 
+pdf("Figures_2025_RevisionsNAR/Gene_saturationPlot.pdf", width=10, height=5)
 ggplot(df %>% rename("Sample" = "variable"), aes(proportions, value, color = Data, shape = Sample)) + 
   geom_point() + 
   ylab("Median Genes per Cell") + 
@@ -560,6 +566,7 @@ ggplot(df %>% rename("Sample" = "variable"), aes(proportions, value, color = Dat
   scale_color_manual(values = myColors, labels = function(x) str_wrap(x, width = 18)) +  
   geom_line() + 
   theme(text = element_text(size = 20))
+dev.off()
 ```
 
 ### Distribution of genes per cell
@@ -594,9 +601,9 @@ for (x in names(seurat_IllDataList)){
   pb = seurat_pbDataList[[x]]
   ill = seurat_IllDataList[[x]]
   commonIds = intersect(colnames(pb[["RNA"]]), colnames(ill[["RNA"]]))
-  z = data.frame("PacBio" = colSums(pb[,colnames(pb) %in% commonIds][["RNA"]]$counts > 0)) %>% rownames_to_column("CellID") %>% melt()
-  y = data.frame("Illumina common cells" = colSums(ill[,colnames(ill) %in% commonIds][["RNA"]]$counts > 0)) %>% rownames_to_column("CellID") %>% melt() %>% mutate(variable = "Illumina common cells")
-  v = data.frame("Illumina only" = colSums(ill[,!colnames(ill) %in% commonIds][["RNA"]]$counts > 0)) %>% rownames_to_column("CellID") %>% melt() %>% mutate(variable = "Illumina only")
+  z = data.frame("PacBio" = colSums(pb[,colnames(pb) %in% commonIds][["RNA"]]$counts > 0)) %>% rownames_to_column("CellID") %>% melt() %>% mutate(variable = "PacBio Common")
+  y = data.frame("Illumina common cells" = colSums(ill[,colnames(ill) %in% commonIds][["RNA"]]$counts > 0)) %>% rownames_to_column("CellID") %>% melt() %>% mutate(variable = "Illumina Common")
+  v = data.frame("Illumina only" = colSums(ill[,!colnames(ill) %in% commonIds][["RNA"]]$counts > 0)) %>% rownames_to_column("CellID") %>% melt() %>% mutate(variable = "Illumina Only")
   df = rbind(z,y,v)
   df$Sample = x
   final = rbind(final, df)
@@ -604,10 +611,12 @@ for (x in names(seurat_IllDataList)){
 
 final$Sample = factor(final$Sample, levels = names(seurat_IllDataList))
 
-ggplot(final, aes(Sample, value, fill = variable)) + 
+pdf("Figures_2025_RevisionsNAR/Gene_perCell_CommonCells.pdf", width=6, height=5)
+ggplot(final, aes(Sample, value, fill = factor(variable, levels = c("Illumina Only","Illumina Common","PacBio Common")))) + 
     geom_violin() + 
-    scale_fill_manual(values = c("cyan", "#440154FF", "#A6761D")) +
-    labs(x = "Sample", y = "Genes per Cell", fill = "") + theme(legend.text = element_text(size = 13), legend.position = "top") + stat_summary(fun.y=median, geom="point", size=2, color="orange", position=position_dodge(width=0.9))
+    scale_fill_manual(values = c("#A6761D", "#440154FF", "cyan")) +
+    labs(x = "Sample", y = "Genes per Cell", fill = "") + theme(legend.text = element_text(size = 13), legend.position = "top", axis.title.y = element_text(size = 16), axis.text.x = element_text(size = 14), axis.text.y = element_text(size = 16)) + stat_summary(fun.y=mean, geom="point", size=2, color="red", position=position_dodge(width=0.9))
+dev.off()
 ```
 
 ## edgeR extactTest selection {.tabset}
@@ -732,14 +741,19 @@ data_summary <- function(x) {
     return(c(y=m))
 }
 
-p1 = comb[,c(1,6,9)] %>% ggplot(aes(Sample, featWidth, fill = EdgeRLabel)) + geom_violin() + scale_fill_manual(values = c("#A6761D", "#440154FF", "cyan")) + labs(y = "Gene Length", fill = "") + theme( legend.text = element_text(size = 11), legend.position = "top", legend.spacing.x = unit(3, 'cm'), text = element_text(size = 13)) + ylim(0,6000) + stat_summary(fun.y=mean, position=position_dodge(width=0.9), colour = "red")
+pdf("Figures_2025_RevisionsNAR/Genelength_CommonCells.pdf", width=6, height=5)
+p1 = comb[,c(1,6,9)] %>% ggplot(aes(Sample, featWidth, fill = factor(EdgeRLabel, levels = c("Illumina > PacBio", "PacBio > Illumina", "Illumina ~ PacBio")))) + geom_violin() + scale_fill_manual(values = c("#A6761D","cyan","#440154FF")) + labs(y = "Gene Length (bp)", fill = "") + theme( legend.text = element_text(size = 11), legend.position = "top", legend.spacing.x = unit(3, 'cm'), text = element_text(size = 14), axis.title.y = element_text(size = 16), axis.text.y = element_text(size = 16), axis.text.x = element_text(size = 14)) + ylim(0,6000) + stat_summary(fun.y=mean, position=position_dodge(width=0.9), colour = "red")
 p1
+dev.off()
 ```
 
 ```{r, fig.width=12, fig.height=5, echo=FALSE, message=FALSE, warning=FALSE}
 library(ggpubr)
 my_comparisons <- list( c("Illumina > PacBio", "Illumina ~ PacBio"), c("Illumina > PacBio", "PacBio > Illumina"), c("Illumina ~ PacBio", "PacBio > Illumina") )
-comb[,c(1,6,9)] %>% ggplot(aes(EdgeRLabel, featWidth)) + facet_grid(~Sample)  + geom_boxplot()   + stat_compare_means(comparisons = my_comparisons, method = "t.test") + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust= 1))
+
+pdf("Figures_2025_RevisionsNAR/Supp_Figure3.pdf", width=12, height=5)
+comb[,c(1,6,9)] %>% ggplot(aes(EdgeRLabel, featWidth)) + facet_grid(~Sample)  + geom_boxplot()   + stat_compare_means(comparisons = my_comparisons, method = "t.test") + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust= 1)) + labs(y = "Gene Length")
+dev.off()
 ```
 
 
@@ -752,7 +766,9 @@ p1
 ```{r, fig.width=12, fig.height=5, echo=FALSE, message=FALSE, warning=FALSE}
 
 my_comparisons <- list( c("Illumina > PacBio", "Illumina ~ PacBio"), c("Illumina > PacBio", "PacBio > Illumina"), c("Illumina ~ PacBio", "PacBio > Illumina") )
-comb[,c(1,5,9)] %>% ggplot(aes(EdgeRLabel, gc)) + facet_grid(~Sample)  + geom_boxplot()   + stat_compare_means(comparisons = my_comparisons, method = "t.test") + theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust= 1))
+pdf("Figures_2025_RevisionsNAR/Supp_Figure4.pdf", width=12, height=5)
+comb[,c(1,5,9)] %>% ggplot(aes(EdgeRLabel, gc)) + facet_grid(~Sample)  + geom_boxplot()   + stat_compare_means(comparisons = my_comparisons, method = "t.test") + theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust= 1)) 
+dev.off()
 ```
 
 ### GC
@@ -837,12 +853,13 @@ for (i in merged_data){
   p1 = SCpubr::do_DimPlot(sample = i, group.by = "Batch", colors.use = myColors) + theme(plot.background = element_rect(color = "black"))
   p2 = SCpubr::do_BoxPlot(sample = i,feature = "nCount_RNA", split.by = "Batch", colors.use = myColors) + theme(plot.background = element_rect(color = "black"))
   p3 = SCpubr::do_BarPlot(i, group.by = "Batch", split.by = "seurat_clusters", position = "stack", colors.use = myColors) + theme(plot.background = element_rect(color = "black"))
-  p4 = plot_grid(p1,p3, ncol = 2)
+  p4 = plot_grid(p1,p3, nrow = 2)
   groblist[[v]] = p4
   n = n + 1
 }
-
-plot_grid(plotlist = groblist, ncol = 1, labels = c('Normal', 'ccRCC_2', "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+pdf("Figures_2025_RevisionsNAR/UMAP_Plots_CommonCells_v2.pdf", height=15, width=7)
+plot_grid(plotlist = groblist, ncol = 5, labels = c('Normal', 'ccRCC_2', "ccRCC_3", "ccRCC_4", "ccRCC_5"))
+dev.off()
 ```
 
 ### DEGs per cluster
@@ -908,7 +925,7 @@ ggplot(euclideandist, aes(distance, colour = Sample)) + geom_freqpoly(binwidth =
 
 
 ```{r, fig.height=3, fig.width=5}
-
+pdf("Figures_2025_RevisionsNAR/Euclidean_distance_UMAP.pdf", height=3, width=5)
 ggplot(euclideandist, aes(Sample, distance)) + geom_violin() + xlab("Sample") + ylab("Euclidean distance") + theme(text = element_text(size = 10)) + geom_quasirandom()
 ```
 
@@ -917,8 +934,40 @@ ggplot(euclideandist, aes(Sample, distance)) + geom_violin() + xlab("Sample") + 
 ```{r markers1b, fig.width=8, fig.height=10, echo=FALSE, message=FALSE, warning=FALSE}
 scData = merge(x=merged_data[[1]], y=tail(merged_data, length(merged_data) - 1), merge.data=TRUE)
 scData = AddMetaData(scData, data.frame("Sample" = scData$Sample) %>% mutate("Sample_name" = str_remove(str_remove(scData$Sample, "_o31598"), "_1")), col.name = "Sample_name")
+pdf("Figures_2025_RevisionsNAR/ccRCC_related_gene_exp_scpubr.pdf", width=8, height=10)
 SCpubr::do_ExpressionHeatmap(sample = scData,
                              features = c('CA9', 'NDUFA4L2', 'ANGPTL4','EPCAM', "HILPDA4", "CRYAB", "VEGFA", "ADM", "EGLN3", "CSRP2"),
                              group.by = c( "Batch", "annotation", "Sample_name"))
+dev.off()
 
+```
+
+
+## Important genes boxplot
+
+```{r markers1b, fig.width=8, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE}
+
+ill = NULL
+for (i in seq(1,5,1)){
+  name = paste0("data.1.",i)
+  print(name)
+  ill = rbind(ill,data.frame(t(scData[["RNA"]][name][c('CA9', 'NDUFA4L2', 'ANGPTL4','EPCAM', "CRYAB", "VEGFA", "ADM", "EGLN3", "CSRP2"),])) %>% mutate(method = "Illumina") %>% mutate(sample = i))
+}
+
+pb = NULL
+for (i in seq(2,5,1)){
+  name = paste0("data.2.",i)
+  print(name)
+  pb = rbind(pb,data.frame(t(scData[["RNA"]][name][c('CA9', 'NDUFA4L2', 'ANGPTL4','EPCAM', "CRYAB", "VEGFA", "ADM", "EGLN3", "CSRP2"),])) %>% mutate(method = "PacBio") %>% mutate(sample = i))
+  }
+pb = rbind(pb,data.frame(t(scData[["RNA"]]["data.2.1"][c('NDUFA4L2', 'ANGPTL4','EPCAM', "CRYAB", "VEGFA", "ADM", "EGLN3", "CSRP2"),])) %>% mutate(method = "PacBio", CA9 = 0, sample = 1))
+
+df = rbind(ill, pb) %>% group_by(sample,method) %>% summarise(across(where(is.numeric), ~ mean(.x, na.rm = TRUE))) %>% mutate(sample_label = paste0(sample, "_", method)) %>% ungroup() %>% column_to_rownames("sample_label") %>% dplyr::select(-1,-2) %>% t()
+
+annot = rbind(ill, pb) %>% group_by(sample,method) %>% summarise(across(where(is.numeric), ~ mean(.x, na.rm = TRUE))) %>% mutate(sample_label = paste0(sample, "_", method)) %>% ungroup() %>% column_to_rownames("sample_label") %>% dplyr::select(1,2) %>% mutate(sample = case_when(sample == 1 ~ "Normal", sample == 2 ~ "ccRCC_2", sample == 3 ~ "ccRCC_3", sample == 4 ~ "ccRCC_4",sample == 5 ~ "ccRCC_5"))
+annot$sample = factor(annot$sample, levels = sample_data$Name)
+
+pdf("Figures_2025_RevisionsNAR/ccRCC_related_gene_exp.pdf", width=8, height=6)
+pheatmap(df, show_colnames = F, annotation_col = annot, cluster_cols = F, annotation_colors = list(method = c("Illumina" = "#A6761D", "PacBio" = "cyan"), sample = c("Normal" = "#7570B3", "ccRCC_2" = "#1B9E77" , "ccRCC_3"="#D95F02","ccRCC_4"= "#E7298A" ,"ccRCC_5" = "#66A61E")), main = "Gene Expression", name = "LogNorm")
+dev.off()
 ```
