@@ -12,7 +12,7 @@ The repository contains the following set of scripts/reports:
 In order to recover cell barcodes that were not called real cells we used the script: rerun_isoseq_keep_nonreal_cells.R
 In order to recover transcripts and reads mapping to mitochondrial reads we reran Pigeon using the *_pigeon_getMT.sh scripts
 
-- Whole data summary computed from mapped data
+- Whole data summary computed from mapped data.
 Cell statistics (mitochondrial content, TSO and UMI counts) computed from PacBio and Illumina bam files: compileMITOstats.R, compileTSOPAInfo.R, compileUMIcounts.R
 
 - Cell calling: 
