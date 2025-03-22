@@ -37,7 +37,7 @@ library(cowplot)
 library(gridExtra)
 library(ggbeeswarm)
 source("functions.R")
-sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
+sample_data = ezRead.table("2024-05-22-sampleInfo.tsv")
 ##Load all pacbio dirs
 pbDirs <- file.path(sample_data$PigeonFiltered, "genes_seurat/")
 
