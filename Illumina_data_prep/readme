@@ -1,0 +1,4 @@
+This directory contains scripts run on Illumina data.
+
+First - CellRanger.R for preprocessing
+Second - ScSeurat.R for creating a seurat object
