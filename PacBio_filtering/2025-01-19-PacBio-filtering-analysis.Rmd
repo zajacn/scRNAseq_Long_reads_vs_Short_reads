@@ -37,7 +37,7 @@ library(cowplot)
 library(gridExtra)
 library(ggbeeswarm)
 source("functions.R")
-sample_data = ezRead.table("../2024-05-22-sampleInfo.tsv")
+sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
 ##Load all pacbio dirs
 pbDirs <- file.path(sample_data$PigeonFiltered, "genes_seurat/")
 
@@ -211,8 +211,11 @@ reasons_pbAnnot_df$Sample = factor(reasons_pbAnnot_df$Sample, levels = c("Normal
 
 ```
 
+# {.tabset}
 
-1. How many isoforms and reads are filtered
+This notebook aims to analyse the output and logic behind the isoform filtering applied in SMRTLink v11.1.
+
+## How many isoforms and reads are filtered
 
 ```{r, fig.height=6, fig.width=10}
 reasons_pbAnnot_df %>% 
@@ -230,7 +233,7 @@ reasons_pbAnnot_df %>%
 
 ```{r, fig.height=6, fig.width=10}
 
-pdf("Figures_2025_RevisionsNAR/PB_Artefacts_Reads_Isoforms.pdf", height=6, width=10)
+pdf("Figures_2025_RevisionsNAR/Figure5A.pdf", height=6, width=10)
 merge(
     reasons_pbAnnot_df %>% 
         group_by(Sample, filter) %>% 
@@ -257,8 +260,7 @@ merge(
 dev.off()
 ```
 
-
-2. The so called artefacts what do they classify as
+## Classification of artefacts according to the SQUANTI criteria
 
 ```{r, fig.height=6, fig.width=10}
 df = reasons_pbAnnot_df %>% 
@@ -271,7 +273,7 @@ df = reasons_pbAnnot_df %>%
                               .default = category),
          filter = if_else(filter == "LowCoverage/Non-Canonical", "LCNC", filter)) 
 df = df[!df$category %in% c("moreJunctions", "fusion"),]
-pdf("Figures_2025_RevisionsNAR/Classification_Reads_Isoforms.pdf", height=6, width=10)
+pdf("Figures_2025_RevisionsNAR/Figure5B.pdf", height=6, width=10)
 ggplot(melt(df), aes(x="", y=value, fill=category)) + 
     facet_grid(variable~filter) + geom_bar(stat="identity", position = "fill", width=1, color="white") +
     coord_polar("y", start=0) + theme_classic() +
@@ -286,10 +288,9 @@ ggplot(melt(df), aes(x="", y=value, fill=category)) +
 dev.off()
 ```
 
+## Comparison with Illumina
 
-2. What do the alignments look like in Illumina 
-
-How many are counted, how many are unspliced
+Subset the same reads from Illumina using the UMI-cell barcode identifier and compare the quality of those reads and alignments - how many are counted, how many are unspliced.
 
 ```{r fig.height=4, fig.width=6}
 library(Rsamtools)
@@ -329,7 +330,7 @@ x = alignment_Q %>% group_by(Sample, label, tagIds, category) %>% summarise(Freq
 x = x %>% pivot_wider(names_from = category, values_from = Freq)
 x$sum = rowSums(x[,c(4:6)])
 x[,c(4:6)] = (x[,c(4:6)]*100)/x$sum
-pdf("Figures_2025_RevisionsNAR/Illumina_equivalents_PacBio_artefacts.pdf", height=4, width=6)
+pdf("Figures_2025_RevisionsNAR/Figure5H.pdf", height=4, width=6)
 melt(x[,-7], id.vars = c("Sample", "label", "tagIds")) %>% 
     ggplot(aes(label, value, color = variable))  + 
     geom_quasirandom(size = 2, dodge.width=.9) + 
@@ -378,10 +379,11 @@ melt(alignment_Q[,-8], id.vars = c("Sample", "label", "tagIds")) %>%
     geom_boxplot() + labs(x = "label", y = "percentage", color = "alignment type")
 ```
 
-3. Low coverage and NonCanonical have the biggest impact  - correlation
+## Pseudobulk correlation with Illumina {.tabset}
 
+We observe Low Coverage and NonCanonical isoform removal have the biggest impact on the difference in counts between Illumina and PacBio
 
-If you compare to nonfiltered data:
+### PacBio unfiltered data vs Illumina
 
 ```{r, fig.width=7, fig.height=18, echo=FALSE, message=FALSE, warning=FALSE}
 
@@ -435,7 +437,7 @@ par(op)
 ```
 
 
-Filtered data:
+### PacBio filtered data vs Illumina data
 
 ```{r, fig.width=7, fig.height=18, echo=FALSE, message=FALSE, warning=FALSE}
 
@@ -488,7 +490,11 @@ for (i in names(illumina_pseudobulk_c)){
 par(op)
 ```
 
-4. Which genes are affected? What do we expect from those genes?
+## Effected genes
+
+Removal of artefactual isoforms filters out genes - Which genes are affected?
+
+1. Run edgeR to find genes with significantly different expression between PacBio filtered data and Illumina data.
 
 ```{r, fig.width=15, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE}
 library(edgeR)
@@ -524,6 +530,7 @@ for (i in names(final_toCounts)){
 }
 ```
 
+2. Check the gene length profile of the genes that differ in counts between Illumina and PacBio and those that don't.  - different versions of the same figure
 
 ```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
 
@@ -533,6 +540,7 @@ comb = comb[comb$Illumina > 0 & comb$PacBio > 0,]
 
 comb %>% group_by(Sample, EdgeRLabel, widthType) %>% summarise(proportion = n()) %>% ggplot(aes(EdgeRLabel, proportion, fill = widthType)) + geom_col(position = "fill", colour="black") + facet_grid(~Sample) + theme(text = element_text(size = 13), axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5, size = 13), legend.position = 'top', legend.spacing.x = unit(0.5, 'cm'), legend.text = element_text(size = 14)) + labs(x = "") + scale_fill_manual(values = c("#F8766D", "#619CFF", "#00BA38"))
 ```
+
 
 ```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
 
@@ -568,14 +576,13 @@ data_summary <- function(x) {
     ymax <- m+sd(x)
     return(c(y=m,ymin=ymin,ymax=ymax))
 }
-pdf("Figures_2025_RevisionsNAR/Genelength_CommonCells_filtereddata.pdf", width=8, height=5)
+pdf("Figures_2025_RevisionsNAR/Figure5C.pdf", width=8, height=5)
 p1 = comb[,c(1,6,9)] %>% ggplot(aes(Sample, featWidth, fill = EdgeRLabel)) + geom_violin() + scale_fill_manual(values = c("#A6761D", "#440154FF", "cyan")) + labs(y = "Gene Length (bp)", fill = "") + theme( legend.text = element_text(size = 11), legend.position = "top", legend.spacing.x = unit(3, 'cm'), text = element_text(size = 15), axis.text.x = element_text(size = 15)) + ylim(0,6000) + stat_summary(fun.y=mean, position=position_dodge(width=0.9), colour = "red")
 p1
 dev.off()
 ```
 
-
-5. Length of the reads that map to those genes
+3. Look at the length of the PacBio reads that map to those genes - different versions of the same figure
 
 ```{r, fig.width=6, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
 ggplot() + 
@@ -596,7 +603,7 @@ for (i in unique(reasons_pbAnnot_df$Sample)){
 
 ```
 
-General length of filtered artefacts
+## Length of PacBio reads mapping to the artefactual isoforms
 
 ```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
 
@@ -608,16 +615,18 @@ ggplot() +
 
 ```
 
+
 ```{r, fig.width=15, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
 #reasons_pbAnnot_df$filter2 = if_else(reasons_pbAnnot_df$filter == "Unfiltered", "Unfiltered", "Filtered")
 
 ggplot(reasons_pbAnnot_df, aes(length, fill = filter2)) + geom_density() + scale_fill_manual(values = c("red", "black")) + theme(strip.text = element_text(size = 15), legend.position = "top", legend.text = element_text(size = 17)) + xlim(0,3500) + labs(fill= "PacBio read category") + theme(text = element_text(size = 14)) + facet_grid(~Sample)
 ```
 
+
 ```{r, fig.width=15, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
 #reasons_pbAnnot_df$filter2 = if_else(reasons_pbAnnot_df$filter == "Unfiltered", "Unfiltered", "Filtered")
 
-pdf("Figures_2025_RevisionsNAR/Length_pacBio_artefacts.pdf",width=7, height=5)
+pdf("Figures_2025_RevisionsNAR/Figure5D.pdf",width=7, height=5)
 ggplot(reasons_pbAnnot_df[reasons_pbAnnot_df$filter %in% c("Unfiltered", "LowCoverage/Non-Canonical"),], aes(length, color = filter2)) + geom_density() + scale_color_manual(values = c("red", "black")) + theme(strip.text = element_text(size = 15), legend.position = "top", legend.text = element_text(size = 17)) + xlim(0,3500) + labs(color="PacBio isoform category", x = "Read Length (bp)",y = "Density") + theme(text = element_text(size = 14), axis.text.y = element_text(size = 17), axis.text.x = element_text(size = 17)) 
 dev.off()
 ```
@@ -630,7 +639,9 @@ for (i in levels(reasons_pbAnnot_df$Sample)){
 }
 ```
 
-6. Lets compare PacBio to PacBio unfiltered  - pseudobulk correlation
+## Comparison of PacBio filtered and PacBio unfiltered data {.tabset}
+
+### Pseudobulk correlation
 
 Not scaled and normalized
 
@@ -646,7 +657,7 @@ for (i in names(seurat_pbDataList)){
     scData = seurat_pbDataList[[i]][["RNA"]]$counts
     pacbio_pseudobulk[[i]] = rowSums(scData)
 }
-pdf("Figures_2025_RevisionsNAR/Pseudobulk_gene_expression_allcells_pacbio_vs_pacbiofilt.pdf", width=7, height=18)
+pdf("Figures_2025_RevisionsNAR/Figure5E.pdf", width=7, height=18)
 op = par(mfrow=c(5,2), mar = c(3,4.5,2,2))
 final_toCounts = NULL
 n = 1
@@ -680,7 +691,11 @@ par(op)
 dev.off()
 ```
 
-7. Which genes are affected? What do we expect from those genes?
+## Effected genes
+
+Structural evaluation of the genes.
+
+1. Run edgeR to find genes with significantly different expression between PacBio filtered and unfiltered data.
 
 ```{r, fig.width=15, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE}
 library(edgeR)
@@ -717,6 +732,7 @@ for (i in names(final_toCounts)){
 }
 ```
 
+2. What is the width and GC content of those genes.
 
 ```{r, fig.width=11, fig.height=4, echo=FALSE, message=FALSE, warning=FALSE}
 
@@ -754,8 +770,7 @@ merge(comb %>% group_by(Sample, EdgeRLabel, widthType) %>% summarise(count = n()
   scale_fill_manual(values = c("#F8766D", "#619CFF", "#00BA38"))
 ```
 
-
-8. Impact on merged data
+## Impact of filtering cell clustering
 
 UMAPs merged data SCpubr with clusters
 
@@ -772,7 +787,7 @@ for (i in merged_data){
   n = n + 1
 }
 
-pdf("Figures_2025_RevisionsNAR/UMAP_Plots_CommonCells_PacBio_filtered.pdf", height=7, width=15)
+pdf("Figures_2025_RevisionsNAR/Figure5F.pdf", height=7, width=15)
 plot_grid(plotlist = groblist, ncol = 5, labels = c('Normal', 'ccRCC_2', "ccRCC_3", "ccRCC_4", "ccRCC_5"))
 dev.off()
 ```
@@ -782,7 +797,7 @@ dev.off()
 ```{r, fig.height=10, fig.width=15, echo=FALSE, message=FALSE, warning=FALSE}
 
 for (i in names(merged_data)){
-  filename = paste0(i,"GroupwiseDEPlot.pdf")
+  filename = paste0(i,"GroupwiseDEPlot_Figure5G.pdf")
   Seurat::Idents(merged_data[[i]]) <- merged_data[[i]]$seurat_clusters
   de_genes <- tibble::tibble(Seurat::FindAllMarkers(object = merged_data[[i]]))
   p1 <- SCpubr::do_GroupwiseDEPlot(sample = merged_data[[i]],
@@ -797,7 +812,6 @@ for (i in names(merged_data)){
 
 ```
 
-
 ### Box plots SCpubr
 
 ```{r, fig.height=4, fig.width=10, echo=FALSE, message=FALSE, warning=FALSE}
@@ -809,7 +823,6 @@ for (i in merged_data){
 }
 
 ```
-
 
 ## Euclidean distance
 
@@ -858,7 +871,7 @@ makers3  %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) -> top10a
 DoHeatmap(merged_data$ccRCC_3, features = top10a$gene) + NoLegend() 
 ```
 
-# Locus coverage
+# Selected loci coverage
 
 ```{r, fig.height=6, fig.width=15, echo=FALSE, message=FALSE, warning=FALSE}
 #x = reasons_pbAnnot_df[grepl("^AA", reasons_pbAnnot_df$BCrev),] %>% group_by(Sample, filter, gene, category) %>% summarise(count = n())
