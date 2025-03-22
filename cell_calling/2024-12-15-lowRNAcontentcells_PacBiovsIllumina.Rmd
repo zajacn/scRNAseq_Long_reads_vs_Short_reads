@@ -1,5 +1,5 @@
 ---
-title:  "Low RNA content cells"
+title:  "p28443 low RNA content cells and empty drops"
 author: "Natalia Zajac"
 output:
   html_document: 
@@ -118,6 +118,8 @@ names(seurat_pbDataList_realcells) = sample_data$Name
 
 # {.tabset}
 
+This notebooks contains analysis of low RNA content cells from Illumina and empty droplets from Illumina and PacBio.
+
 ## nFeature_RNA per cell
 
 ```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
@@ -207,7 +209,7 @@ for (i in names(illDirs_raw)){
 
 All Samples together
 
-```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
+```{r, fig.width=15, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
 
 ggplot(bcrank_all, aes(rank ,total, color = factor(Sample, levels = sample_data$Name))) + 
   geom_point() + 
@@ -305,43 +307,6 @@ for (i in names(illDirs_raw)){
 
 ```
 
-### PacBio {.tabset}
-
-```{r, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
-
-pacbioDirs_raw_filt = lapply(pacbioDirs_raw, function(x){
-  set.seed(100)
-  emptyStats <- emptyDrops(x, niters=1e5)
-  x <- x[,which(emptyStats$FDR <= 0.001)]
-})
-
-
-```
-
-
-####  Distribution of pvalues for empty droplets
-
-```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
-
-for (i in names(illDirs_raw)){
-  set.seed(100)
-  limit <- 100   
-  all.out <- emptyDrops(counts(pacbioDirs_raw[[i]]), lower=limit, test.ambient=TRUE)
-  hist(all.out$PValue[all.out$Total <= limit & all.out$Total > 0],
-       xlab="P-value", main="", col="grey80") 
-}
-
-```
-
-#### Number of filtered cells per sample
-
-```{r, fig.width=7, fig.height=7, echo=FALSE, message=FALSE, warning=FALSE}
-
-data.frame(nonemtpy_cells = t(data.frame(lapply(pacbioDirs_raw_filt, function(x) length(x$Barcode))))) %>% rownames_to_column() %>% datatable()
-
-```
-
-
 ## Empty Droplet analysis BLAZE
 
 ```{r, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
@@ -367,7 +332,6 @@ for (i in sample_data$Name){
 }
 
 ```
-
 
 Simulated Barcode rank plot
 
@@ -429,4 +393,5 @@ ccRCC2 - 51/(51 + 137)
 ccRCC3 - 162/(162 + 116)
 ccRCC4 - 208/(208 + 365)
 ccRCC5 - 365/(365 + 402)
+
 
