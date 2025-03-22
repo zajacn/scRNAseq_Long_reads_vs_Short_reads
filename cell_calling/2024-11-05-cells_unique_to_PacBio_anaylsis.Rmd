@@ -20,7 +20,7 @@ library(Seurat)
 library(tidyverse)
 library(reshape2)
 
-sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
+sample_data = ezRead.table("2024-05-22-sampleInfo.tsv")
 mtcontent = read.csv("/srv/GT/analysis/zajacn/p28443/mito_content.csv")
 
 ```
