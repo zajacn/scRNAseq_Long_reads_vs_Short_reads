@@ -1,0 +1,5 @@
+This directory contains scripts and reports for comparison of subsetted bam files between Illumina and PacBio and general QC of the whole data (cells, Umis, number of genes).
+
+Rscript compileMatchedReads.R - runs the subset of bam files (to barcodes starting with AA) and generation of summary files for Illumina and PacBio is .qsd format.
+
+The three others are Rmd reports that contain the analysis of the data and generation of figures.
