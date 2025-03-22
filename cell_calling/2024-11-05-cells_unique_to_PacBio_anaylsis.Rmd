@@ -1,5 +1,5 @@
 ---
-title:  "p28443 Revisions - Cells unique to PacBio"
+title:  "p28443 Cells unique to PacBio"
 author: "Natalia Zajac"
 output:
   html_document: 
@@ -24,6 +24,10 @@ sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillum
 mtcontent = read.csv("/srv/GT/analysis/zajacn/p28443/mito_content.csv")
 
 ```
+
+# {.tabset}
+
+This notebook aims to analyse the very small number of cells identified uniquely in PacBio.
 
 ## PacBio specific cells
 
