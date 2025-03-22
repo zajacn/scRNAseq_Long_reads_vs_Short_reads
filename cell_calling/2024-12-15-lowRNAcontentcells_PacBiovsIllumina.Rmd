@@ -38,7 +38,7 @@ library(gridExtra)
 library(ggpubr)
 
 source("functions.R")
-sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
+sample_data = ezRead.table("2024-05-22-sampleInfo.tsv")
 
 geneAnno <- ezRead.table("/srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/SMRTLink11.1_annotation/genes_annotation_byGene.txt")
 #Read in mtcontent from Hubert
