@@ -1,5 +1,5 @@
 ---
-title:  "p28443 common cells"
+title:  "Low RNA content cells"
 author: "Natalia Zajac"
 output:
   html_document: 
@@ -38,7 +38,7 @@ library(gridExtra)
 library(ggpubr)
 
 source("functions.R")
-sample_data = ezRead.table("../2024-05-22-sampleInfo.tsv")
+sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
 
 geneAnno <- ezRead.table("/srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/SMRTLink11.1_annotation/genes_annotation_byGene.txt")
 #Read in mtcontent from Hubert
@@ -292,10 +292,10 @@ for (i in names(illDirs_raw)){
   bcrank2$color = factor(bcrank2$color, levels = c("Common","Rest"))
   
   
-  filename = paste0(i, "UMI_KneePLOT.pdf")
-  pdf(file.path("Figures_2025_RevisionsNAR",filename), width = 7, height = 7)
+  filename = paste0(i, "Figure2Bbottom.pdf")
+  pdf(file.path("Figures_2025_RevisionsNAR",filename), width = 7, height = 7.5)
   print(
-    ggplot() + geom_point(data = bcrank, aes(rank, total), color = "#A6761D") + geom_point(data = bcrank2, aes(rank, total), color = "cyan") + scale_x_log10() + scale_y_log10() + theme_bw() + labs(x = "Barcodes", y = "UMI Count") + scale_color_manual(values = c("#440154FF", "#A6761D", "grey")) + theme(legend.position = "top", legend.title = element_blank(), axis.text.x = element_text(size = 15), axis.text.y = element_text(size = 15), axis.title.x = element_text(size = 15), axis.title.y = element_text(size = 15)) + geom_hline(yintercept = head(bcrank2[bcrank2$color == "Common",], n = 1)$total ,color = "cyan") + geom_hline(yintercept = head(bcrank[bcrank$color == "Common",], n = 1)$total ,color = "#A6761D") + geom_hline(yintercept = head(bcrank[bcrank$color == "Unique to ILL",], n = 1)$total ,color = "#A6761D", linetype = "dashed") + ggtitle(i)) 
+    ggplot() + geom_point(data = bcrank, aes(rank, total, color=color)) + geom_point(data = bcrank2, aes(rank, total, color=color)) + scale_x_log10() + scale_y_log10() + theme_bw() + labs(x = "Barcodes", y = "UMI Count") + scale_color_manual(values = c("#440154FF", "#A6761D", "grey")) + theme(legend.position = "top", legend.title = element_blank(), legend.text = element_text(size = 20), axis.text.x = element_text(size = 15), axis.text.y = element_text(size = 15), axis.title.x = element_text(size = 20), axis.title.y = element_text(size = 20), title = element_text(size = 20)) + geom_hline(yintercept = head(bcrank2[bcrank2$color == "Common",], n = 1)$total ,color = "cyan") + geom_hline(yintercept = head(bcrank[bcrank$color == "Common",], n = 1)$total ,color = "#A6761D") + geom_hline(yintercept = head(bcrank[bcrank$color == "Unique to ILL",], n = 1)$total ,color = "#A6761D", linetype = "dashed") + ggtitle(i)) 
     # +
     #annotate("text", x=100000, y=head(bcrank[bcrank$color == "Unique to ILL",], n = 1)$total + 200, label="Illumina specific Cells") +
     #annotate("text", x=100000, y=head(bcrank[bcrank$color == "Common",], n = 1)$total + 10000, label="Common Cells") +
@@ -359,9 +359,9 @@ names(blaze) = sample_data$Name
 ```{r, fig.width=6, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE}
 
 for (i in sample_data$Name){
-  filename = paste0(i, "BLAZE_VENN.pdf")
+  filename = paste0(i, "Figure2C.pdf")
   pdf(file.path("Figures_2025_RevisionsNAR",filename), width = 7, height = 7)
-  print(ggVennDiagram::ggVennDiagram(list("ILL (CellRanger)" = colnames(seurat_IllDataList[[i]]), "BLAZE EmptyDrops" = blaze[[i]]$V1, "PB (Iso-seq)" = colnames(seurat_pbDataList_realcells[[i]])), set_color = c("#A6761D","black","darkcyan"), set_size = 6, label_size = 11) + ggtitle(i) + scale_x_continuous(expand = expansion(mult = .2)) + scale_fill_distiller(palette = "RdBu") +
+  print(ggVennDiagram::ggVennDiagram(list("ILL (CellRanger)" = colnames(seurat_IllDataList[[i]]), "BLAZE empty\ndroplets" = blaze[[i]]$V1, "PB (Iso-seq)" = colnames(seurat_pbDataList_realcells[[i]])), set_color = c("#A6761D","black","darkcyan"), set_size = 6, label_size = 6) + ggtitle(i) + scale_x_continuous(expand = expansion(mult = .2)) + scale_y_continuous(expand = expansion(mult = .2)) + scale_fill_distiller(palette = "RdBu") +
           theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 20))) 
   dev.off()
 }
@@ -415,7 +415,7 @@ px = ggplot(barcode_data, aes(x = Rank, y = UMI_Counts)) +
         panel.grid.minor = element_blank()
     )
 
-pdf("Figures_2025_RevisionsNAR/Simulated_barcode_rank_plot.pdf", width = 7, height = 6)
+pdf("Figures_2025_RevisionsNAR/Figure2Btop.pdf", width = 7, height = 6)
 px
 dev.off()
 ```
