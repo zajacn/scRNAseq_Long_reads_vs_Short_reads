@@ -1,0 +1,7 @@
+After running SMRTLink v11.1 the pigeon-make seurat command was rerun in the following way to recover mitochondrial and ribosomal reads:
+
+bash ${sample}_pigeon_getMT.sh
+
+After running SMRTLink v11.1 the workflow was rerun via command line in order to also keep reads from non-real cells:
+
+Rscript rerun_isoseq_keep_nonreal_cells.R
