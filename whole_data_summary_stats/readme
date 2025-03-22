@@ -1,0 +1,5 @@
+This directory contains a set of scripts for computing statistics on the cell level from PacBio and Illumina data.
+
+Rscript compileMITOstats.R - compute mitochondrial content per cell barcode for PacBio and Illumina
+Rscript compileTSOPAinfo.R - compute a counts of TSO and Poly-A artefacts per sample from Illumina for cells shared with PacBio and for those uniquely identified in PacBio
+Rscript compileUMIcounts.R - compute the number of UMIs per cell barcode for PacBio and Illumina
