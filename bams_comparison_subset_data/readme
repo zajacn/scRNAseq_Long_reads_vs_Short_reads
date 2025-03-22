@@ -2,4 +2,4 @@ This directory contains scripts and reports for comparison of subsetted bam file
 
 Rscript compileMatchedReads.R - runs the subset of bam files (to barcodes starting with AA) and generation of summary files for Illumina and PacBio is .qsd format.
 
-The three others are Rmd reports that contain the analysis of the data and generation of figures.
+The three others are Rmd reports that contain the analysis of the data and generation of figures. The main one analyses the barcodes subsetted to those beginning with AA, the others analyse the data subsetted to those starting with GC or TG.
