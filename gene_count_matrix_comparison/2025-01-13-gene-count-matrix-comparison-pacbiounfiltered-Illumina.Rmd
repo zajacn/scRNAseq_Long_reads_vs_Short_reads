@@ -38,7 +38,7 @@ library(gridExtra)
 library(ggbeeswarm)
 
 source("functions.R")
-sample_data = ezRead.table("../2024-05-22-sampleInfo.tsv")
+sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
 ##Load all pacbio dirs
 pbDirs <- file.path(sample_data$PigeonUnfiltered, "genes_seurat/")
 
@@ -213,6 +213,8 @@ for (i in names(seurat_pbDataList)){
 
 # {.tabset}
 
+This notebook aims to compare gene expression obtained from PacBio data unfiltered of any artefacts and Illumina data.
+
 ## General {.tabset}
 
 ### Gene expression per cell in Illumina
@@ -256,6 +258,7 @@ p1 = ggplot(sumdf_shared, aes(nCount_RNA, nFeature_RNA, color = Category, shape 
   theme(text = element_text(size = 15))
 p1
 ```
+
 ### Pseudobulk correlation all cells
 
 ```{r, fig.width=7, fig.height=18, echo=FALSE, message=FALSE, warning=FALSE}
@@ -331,7 +334,6 @@ ggplot() +
   geom_text(data = melt(shareddf[c(1,2,5)], id.vars = c("Percentage", "Sample")), aes(Sample, value - 400, label = paste0(Percentage, "%")), color="white", size=3.5)
 ```
 
-
 ### Pseudobulk correlation common cells only 
 
 ```{r, fig.width=7, fig.height=18, echo=FALSE, message=FALSE, warning=FALSE}
@@ -352,7 +354,7 @@ for (i in names(seurat_IllDataList)){
   illumina_pseudobulk_c[[i]] = rowSums(scData)
 }
 
-pdf("Figures_2025_RevisionsNAR/Pseudobulk_gene_expression_commonCells.pdf", width=7, height=18)
+pdf("Figures_2025_RevisionsNAR/Figure4C.pdf", width=7, height=18)
 op = par(mfrow=c(5,2), mar = c(3,4.5,2,2))
 final_toCounts = NULL
 n = 1
@@ -390,7 +392,7 @@ par(op)
 dev.off()
 ```
 
-### Overlap in the detected genes common cells {.tabset}
+### Overlap in the detected genes from common cells {.tabset}
 
 #### Upset
 
@@ -467,7 +469,7 @@ shareddf = shareddf[shareddf$Category != "Absent",]
 shareddf = shareddf %>% pivot_wider(names_from = Category, values_from = count) %>% mutate(Illumina = Illumina + Common, PacBio = PacBio + Common)
 shareddf$Percentage = round((shareddf$Common * 100) / ((shareddf$Illumina - shareddf$Common) + (shareddf$PacBio - shareddf$Common) + shareddf$Common), 1)
 
-pdf("Figures_2025_RevisionsNAR/Common_genes_CommonCells.pdf", width=6, height=5)
+pdf("Figures_2025_RevisionsNAR/Figure4B.pdf", width=6, height=5)
 ggplot() + 
   geom_bar(data = melt(shareddf[c(1,3,4)]), aes(Sample, value, fill = variable), position = "dodge", stat = "identity", show.legend = TRUE) + 
   geom_bar(data=melt(shareddf[c(1,2)]), stat="identity", aes(Sample, value, fill = variable), show.legend = TRUE) +
@@ -476,7 +478,6 @@ ggplot() +
   geom_text(data = melt(shareddf[c(1,2,5)], id.vars = c("Percentage", "Sample")), aes(Sample, value - 400, label = paste0(Percentage, "%")), color="white", size=3.5) + theme(legend.position = "top", legend.text = element_text(size = 13), axis.text.y = element_text(size = 16), axis.title.y = element_text(size = 16), axis.text.x = element_text(size = 14))
 dev.off()
 ```
-
 
 ### Number of detected genes per cell (only common cells) 
 
@@ -611,7 +612,7 @@ for (x in names(seurat_IllDataList)){
 
 final$Sample = factor(final$Sample, levels = names(seurat_IllDataList))
 
-pdf("Figures_2025_RevisionsNAR/Gene_perCell_CommonCells.pdf", width=6, height=5)
+pdf("Figures_2025_RevisionsNAR/Figure4A.pdf", width=6, height=5)
 ggplot(final, aes(Sample, value, fill = factor(variable, levels = c("Illumina Only","Illumina Common","PacBio Common")))) + 
     geom_violin() + 
     scale_fill_manual(values = c("#A6761D", "#440154FF", "cyan")) +
@@ -620,6 +621,8 @@ dev.off()
 ```
 
 ## edgeR extactTest selection {.tabset}
+
+Finding genes with significantly divergent counts between PacBio and Illumina.
 
 ### proportions across width/GC categories
 
@@ -741,11 +744,12 @@ data_summary <- function(x) {
     return(c(y=m))
 }
 
-pdf("Figures_2025_RevisionsNAR/Genelength_CommonCells.pdf", width=6, height=5)
+pdf("Figures_2025_RevisionsNAR/Figure4D.pdf", width=6, height=5)
 p1 = comb[,c(1,6,9)] %>% ggplot(aes(Sample, featWidth, fill = factor(EdgeRLabel, levels = c("Illumina > PacBio", "PacBio > Illumina", "Illumina ~ PacBio")))) + geom_violin() + scale_fill_manual(values = c("#A6761D","cyan","#440154FF")) + labs(y = "Gene Length (bp)", fill = "") + theme( legend.text = element_text(size = 11), legend.position = "top", legend.spacing.x = unit(3, 'cm'), text = element_text(size = 14), axis.title.y = element_text(size = 16), axis.text.y = element_text(size = 16), axis.text.x = element_text(size = 14)) + ylim(0,6000) + stat_summary(fun.y=mean, position=position_dodge(width=0.9), colour = "red")
 p1
 dev.off()
 ```
+
 
 ```{r, fig.width=12, fig.height=5, echo=FALSE, message=FALSE, warning=FALSE}
 library(ggpubr)
@@ -809,7 +813,7 @@ comb %>% group_by(Sample, EdgeRLabel) %>% summarise(count = n()) %>%
 ```
 
 
-## merged data {.tabset}
+## Cell clustering analysis on merged data {.tabset}
 
 ### UMAPs merged data.  
 
@@ -857,7 +861,7 @@ for (i in merged_data){
   groblist[[v]] = p4
   n = n + 1
 }
-pdf("Figures_2025_RevisionsNAR/UMAP_Plots_CommonCells_v2.pdf", height=15, width=7)
+pdf("Figures_2025_RevisionsNAR/Figure4E.pdf", height=15, width=7)
 plot_grid(plotlist = groblist, ncol = 5, labels = c('Normal', 'ccRCC_2', "ccRCC_3", "ccRCC_4", "ccRCC_5"))
 dev.off()
 ```
@@ -925,7 +929,7 @@ ggplot(euclideandist, aes(distance, colour = Sample)) + geom_freqpoly(binwidth =
 
 
 ```{r, fig.height=3, fig.width=5}
-pdf("Figures_2025_RevisionsNAR/Euclidean_distance_UMAP.pdf", height=3, width=5)
+pdf("Figures_2025_RevisionsNAR/Figure4F.pdf", height=3, width=5)
 ggplot(euclideandist, aes(Sample, distance)) + geom_violin() + xlab("Sample") + ylab("Euclidean distance") + theme(text = element_text(size = 10)) + geom_quasirandom()
 ```
 
@@ -943,7 +947,7 @@ dev.off()
 ```
 
 
-## Important genes boxplot
+## Important genes pheatmap
 
 ```{r markers1b, fig.width=8, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE}
 
@@ -967,7 +971,7 @@ df = rbind(ill, pb) %>% group_by(sample,method) %>% summarise(across(where(is.nu
 annot = rbind(ill, pb) %>% group_by(sample,method) %>% summarise(across(where(is.numeric), ~ mean(.x, na.rm = TRUE))) %>% mutate(sample_label = paste0(sample, "_", method)) %>% ungroup() %>% column_to_rownames("sample_label") %>% dplyr::select(1,2) %>% mutate(sample = case_when(sample == 1 ~ "Normal", sample == 2 ~ "ccRCC_2", sample == 3 ~ "ccRCC_3", sample == 4 ~ "ccRCC_4",sample == 5 ~ "ccRCC_5"))
 annot$sample = factor(annot$sample, levels = sample_data$Name)
 
-pdf("Figures_2025_RevisionsNAR/ccRCC_related_gene_exp.pdf", width=8, height=6)
+pdf("Figures_2025_RevisionsNAR/Figure4G.pdf", width=8, height=6)
 pheatmap(df, show_colnames = F, annotation_col = annot, cluster_cols = F, annotation_colors = list(method = c("Illumina" = "#A6761D", "PacBio" = "cyan"), sample = c("Normal" = "#7570B3", "ccRCC_2" = "#1B9E77" , "ccRCC_3"="#D95F02","ccRCC_4"= "#E7298A" ,"ccRCC_5" = "#66A61E")), main = "Gene Expression", name = "LogNorm")
 dev.off()
 ```
