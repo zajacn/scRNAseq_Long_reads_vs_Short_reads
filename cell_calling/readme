@@ -1,0 +1,5 @@
+This directory contains reports and scripts for comparison of the differences in the cell calling between SMRTLink v11.1 run on PacBio data and CellRanger run on Illumina data.
+
+For comparison BLAZE was run on PacBio data for real cell identification and for identification of empty droplets:
+
+bash blaze.sh
