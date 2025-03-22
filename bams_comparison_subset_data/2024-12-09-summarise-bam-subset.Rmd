@@ -39,7 +39,7 @@ library(ggpubr)
 library(ggforce)
 
 source("functions.R")
-sample_data = ezRead.table("/home/zajac/Genomics/p28443_singlecell_pacbiovsillumina/SIB-poster/2024-05-22-sampleInfo.tsv")
+sample_data = ezRead.table("2024-05-22-sampleInfo.tsv")
 geneAnno <- ezRead.table("/srv/GT/reference/Homo_sapiens/GENCODE/GRCh38.p13/Annotation/Release_39-2021-12-09/Genes/SMRTLink11.1_annotation/genes_annotation_byGene.txt")
 sample_data$pbqs = file.path("/srv/GT/analysis/zajacn/p28443/subset_bams_072024", list.files("subset_bams_072024/", pattern = "-pbGa.qsd"))[c(5,1,2,3,4)]
 sample_data$illqs = file.path("/srv/GT/analysis/zajacn/p28443/subset_bams_072024", list.files("subset_bams_072024/", pattern = "-illGa.qsd"))[c(5,1,2,3,4)]
