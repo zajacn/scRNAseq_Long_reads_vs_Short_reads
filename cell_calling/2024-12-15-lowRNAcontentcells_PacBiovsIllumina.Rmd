@@ -320,11 +320,12 @@ for (i in list.files("/srv/gstore/projects/p28443/o31598_SMRTLink_IsoSeq/o31598_
 names(blaze) = sample_data$Name
 ```
 
+Check overlap 
 
 ```{r, fig.width=6, fig.height=6, echo=FALSE, message=FALSE, warning=FALSE}
 
 for (i in sample_data$Name){
-  filename = paste0(i, "Figure2C.pdf")
+  filename = paste0(i, "ggVennDiagram.pdf")
   pdf(file.path("Figures_2025_RevisionsNAR",filename), width = 7, height = 7)
   print(ggVennDiagram::ggVennDiagram(list("ILL (CellRanger)" = colnames(seurat_IllDataList[[i]]), "BLAZE empty\ndroplets" = blaze[[i]]$V1, "PB (Iso-seq)" = colnames(seurat_pbDataList_realcells[[i]])), set_color = c("#A6761D","black","darkcyan"), set_size = 6, label_size = 6) + ggtitle(i) + scale_x_continuous(expand = expansion(mult = .2)) + scale_y_continuous(expand = expansion(mult = .2)) + scale_fill_distiller(palette = "RdBu") +
           theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 20))) 
@@ -332,6 +333,20 @@ for (i in sample_data$Name){
 }
 
 ```
+
+Figure 2C
+
+```{r, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+
+library(nVennR)
+
+for (i in sample_data$Name){
+  filename = paste0(i, "Figure2C.svg")
+  vnr = plotVenn(list("ILL (CellRanger) cells" = colnames(seurat_IllDataList[[i]]), "BLAZE empty\ndroplets" = c(intersect(blaze[[i]]$V1,colnames(seurat_IllDataList[[i]])), intersect(blaze[[i]]$V1,colnames(seurat_pbDataList_realcells[[i]]))), "PB (Iso-seq) cells" = colnames(seurat_pbDataList_realcells[[i]])), outFile=file.path("Figures_2025_RevisionsNAR",filename), setColors = c("#A6761D","black","darkcyan"), fontScale = 2, labelRegions = FALSE)
+}
+
+```
+
 
 Simulated Barcode rank plot
 
