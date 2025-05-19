@@ -31,6 +31,7 @@ The repository contains the following set of scripts/reports:
 - Comparison of PacBio data filtered and unfiltered of artefactual isoforms as part of the Iso-seq + Pigeon workflow (RT-switching, LCNC, IntraPriming):
   - Report/Figures: 2025-01-19-PacBio-filtering-analysis.Rmd.
 
+Note: All scripts contain hardcoded paths to the location of each dataset on our system therefore they would need to be all modified for running them on a different location. 
 
 
 
