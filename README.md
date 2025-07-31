@@ -1,7 +1,7 @@
 # scRNAseq_Long_reads_vs_Short_reads
-This repository contains a code for a yet unpublished manuscript (as of 20.01.2025) entitled: Comparison of Single-cell Long-read and Short-read Transcriptome Sequencing of Patient-derived Organoid Cells of ccRCC: Quality Evaluation of the MAS-ISO-seq Approach.
+This repository contains a code for a publication entitled: Comparison of Single-cell Long-read and Short-read Transcriptome Sequencing of Patient-derived Organoid Cells of ccRCC: Quality Evaluation of the MAS-ISO-seq Approach: https://doi.org/10.1093/nargab/lqaf089
 
-The bioRxiv version of this article can be found here: https://doi.org/10.1101/2024.03.14.584953 and the code under bioRxiv_Scripts refer to this article.
+bioRxiv_Scripts refer to the bioRxiv version of this article: https://doi.org/10.1101/2024.03.14.584953.
 
 
 The repository contains the following set of scripts/reports:
